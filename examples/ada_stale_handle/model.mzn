@@ -2,6 +2,7 @@ int: capacity;
 int: old_value;
 int: new_value;
 int: scenario;
+int: counterweave_diversity_seed;
 
 constraint capacity >= 1 /\ capacity <= 8;
 constraint old_value != new_value;

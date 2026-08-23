@@ -27,14 +27,13 @@ package body Counterweave.Campaign_UI is
    use type Interfaces.C.int;
 
    function Isatty (Descriptor : Interfaces.C.int) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "isatty";
+   with Import, Convention => C, External_Name => "isatty";
 
-   function Interactive return Boolean is
-     (Isatty (0) = 1
-      and then Isatty (1) = 1
-      and then
-        (not Ada.Environment_Variables.Exists ("TERM")
-         or else Ada.Environment_Variables.Value ("TERM") /= "dumb"));
+   function Interactive return Boolean
+   is (Isatty (0) = 1
+       and then Isatty (1) = 1
+       and then (not Ada.Environment_Variables.Exists ("TERM")
+                 or else Ada.Environment_Variables.Value ("TERM") /= "dumb"));
 
    function Wide (Value : String) return Wide_Wide_String is
       Result : Wide_Wide_String (Value'Range);
@@ -46,15 +45,15 @@ package body Counterweave.Campaign_UI is
       return Result;
    end Wide;
 
-   function Image (Value : Natural) return String is
-     (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+   function Image (Value : Natural) return String
+   is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
 
-   function Outcome_Image (Value : Attempt_Outcome) return String is
-     (case Value is
-        when Passed    => "PASS",
-        when Found     => "FOUND",
-        when Cancelled => "CANCELLED",
-        when Errored   => "ERROR");
+   function Outcome_Image (Value : Attempt_Outcome) return String
+   is (case Value is
+         when Passed    => "PASS",
+         when Found     => "FOUND",
+         when Cancelled => "CANCELLED",
+         when Errored   => "ERROR");
 
    package body Runs is
 
@@ -74,8 +73,7 @@ package body Counterweave.Campaign_UI is
       package Wide_Text renames Ada.Strings.Wide_Wide_Unbounded;
 
       procedure Initialize
-        (Item : in out Model;
-         Next : in out Transitions.Transition)
+        (Item : in out Model; Next : in out Transitions.Transition)
       is
          pragma Unreferenced (Item);
       begin
@@ -103,7 +101,7 @@ package body Counterweave.Campaign_UI is
                   Transitions.Quit (Next);
                end if;
 
-            when Events.Terminal_Input =>
+            when Events.Terminal_Input      =>
                if Event.Terminal.Kind = Flyology_TUI.Events.Resize then
                   if Event.Terminal.Width >= 48 then
                      Item.Width := Event.Terminal.Width;
@@ -115,7 +113,8 @@ package body Counterweave.Campaign_UI is
                   Counterweave.Processes.Request_Cancel;
                   Item.Cancelling := True;
                elsif Event.Terminal.Kind = Flyology_TUI.Events.Key_Press
-                 and then Event.Terminal.Key.Kind = Flyology_TUI.Events.Text_Key
+                 and then Event.Terminal.Key.Kind
+                          = Flyology_TUI.Events.Text_Key
                then
                   declare
                      Key : constant Wide_Wide_String :=
@@ -123,9 +122,8 @@ package body Counterweave.Campaign_UI is
                          (Event.Terminal.Key.Value);
                   begin
                      if Key = "q"
-                       or else
-                         (Key = "c"
-                          and then Event.Terminal.Key.Modified.Control)
+                       or else (Key = "c"
+                                and then Event.Terminal.Key.Modified.Control)
                      then
                         Counterweave.Processes.Request_Cancel;
                         Item.Cancelling := True;
@@ -136,22 +134,22 @@ package body Counterweave.Campaign_UI is
       end Update;
 
       function Present (Item : Model) return Flyology_TUI.Views.View is
-         Theme : constant Flyology_TUI.Themes.Theme :=
+         Theme           : constant Flyology_TUI.Themes.Theme :=
            Flyology_TUI.Themes.Charm;
-         Accent : constant Flyology_TUI.Styles.Style :=
+         Accent          : constant Flyology_TUI.Styles.Style :=
            Flyology_TUI.Styles.With_Foreground
              (Flyology_TUI.Styles.Default,
               Flyology_TUI.Colors.True_Color (117, 113, 249));
-         Track : constant Flyology_TUI.Styles.Style :=
+         Track           : constant Flyology_TUI.Styles.Style :=
            Flyology_TUI.Styles.With_Foreground
              (Flyology_TUI.Styles.Default,
               Flyology_TUI.Colors.True_Color (72, 72, 82));
          Available_Width : constant Natural :=
            (if Item.Width > 8 then Item.Width - 8 else Item.Width);
-         Content_Width : constant Positive :=
+         Content_Width   : constant Positive :=
            Positive (Natural'Max (40, Natural'Min (72, Available_Width)));
-         Bar_Width : constant Positive := Content_Width;
-         Ratio : constant Long_Float :=
+         Bar_Width       : constant Positive := Content_Width;
+         Ratio           : constant Long_Float :=
            Long_Float (Item.Current) / Long_Float (Maximum_Attempts);
 
          function Render_Progress return Flyology_TUI.Surfaces.Surface is
@@ -166,7 +164,7 @@ package body Counterweave.Campaign_UI is
          function Display_Detail return String is
             Limit : constant Positive :=
               Positive (Natural'Max (16, Content_Width / 2));
-            Last : constant Natural :=
+            Last  : constant Natural :=
               Natural'Min (Length (Item.Last.Detail), Limit);
          begin
             if Last = 0 then
@@ -187,11 +185,9 @@ package body Counterweave.Campaign_UI is
             end;
          end Display_Detail;
 
-         Badge_Tone : constant Flyology_TUI.Components.Indicators.Tone :=
+         Badge_Tone  : constant Flyology_TUI.Components.Indicators.Tone :=
            (if Item.Cancelling
-            or else
-              (Item.Current > 0
-               and then Item.Last.Outcome = Errored)
+              or else (Item.Current > 0 and then Item.Last.Outcome = Errored)
             then Flyology_TUI.Components.Indicators.Error_Tone
             elsif Item.Current > 0 and then Item.Last.Outcome = Found
             then Flyology_TUI.Components.Indicators.Success_Tone
@@ -204,28 +200,25 @@ package body Counterweave.Campaign_UI is
             elsif Item.Current > 0 and then Item.Last.Outcome = Errored
             then "ERROR"
             else "SEARCHING");
-         Heading : constant Flyology_TUI.Surfaces.Surface :=
+         Heading     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Layouts.Join_Horizontally
              (Flyology_TUI.Surfaces.From_Text
                 ("COUNTERWEAVE", Flyology_TUI.Themes.Charm_Palette.Title),
               Flyology_TUI.Components.Indicators.Badge
                 (Badge_Label, Badge_Tone, Theme),
               Gap => 2);
-         Purpose : constant Flyology_TUI.Surfaces.Surface :=
+         Purpose     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Surfaces.From_Text (Wide (Title), Theme.Muted);
-         Divider : constant Flyology_TUI.Surfaces.Surface :=
+         Divider     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Divider
              (Content_Width, "SYSTEM-VALID EXPLORATION", Theme);
-         Trial_Row : constant Flyology_TUI.Surfaces.Surface :=
+         Trial_Row   : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Key_Value
              ("completed trials",
-              Wide
-                (Image (Item.Current)
-                 & " / "
-                 & Image (Maximum_Attempts)),
+              Wide (Image (Item.Current) & " / " & Image (Maximum_Attempts)),
               Content_Width,
               Theme);
-         Seed_Row : constant Flyology_TUI.Surfaces.Surface :=
+         Seed_Row    : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Key_Value
              ("last replay seed",
               Wide
@@ -234,24 +227,21 @@ package body Counterweave.Campaign_UI is
                  else Counterweave.Strings.Compact_Image (Item.Last.Seed)),
               Content_Width,
               Theme);
-         Result_Row : constant Flyology_TUI.Surfaces.Surface :=
+         Result_Row  : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Key_Value
-             ("last oracle result",
+             ("last property result",
               Wide
                 (if Item.Current = 0
                  then "waiting"
                  else
-                   Outcome_Image (Item.Last.Outcome)
-                   & " | "
-                   & Display_Detail),
+                   Outcome_Image (Item.Last.Outcome) & " | " & Display_Detail),
               Content_Width,
               Theme);
-         Metrics : constant Flyology_TUI.Surfaces.Surface :=
+         Metrics     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Layouts.Join_Vertically
              (Trial_Row,
-              Flyology_TUI.Layouts.Join_Vertically
-                (Seed_Row, Result_Row));
-         Help : constant Flyology_TUI.Surfaces.Surface :=
+              Flyology_TUI.Layouts.Join_Vertically (Seed_Row, Result_Row));
+         Help        : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Help.Render
              ([(Key         => Wide_Text.To_Unbounded_Wide_Wide_String ("q"),
                 Description =>
@@ -267,10 +257,11 @@ package body Counterweave.Campaign_UI is
               Width    => Content_Width,
               Theme    => Theme,
               Vertical => False);
-         Footer : constant Flyology_TUI.Surfaces.Surface :=
+         Footer      : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Status_Line
              ([Flyology_TUI.Components.Indicators.Make_Segment
-                 ("CONSTRAINED", Flyology_TUI.Components.Indicators.High,
+                 ("CONSTRAINED",
+                  Flyology_TUI.Components.Indicators.High,
                   Flyology_TUI.Components.Indicators.Success_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
                  ("REPLAYABLE FORKS"),
@@ -278,7 +269,7 @@ package body Counterweave.Campaign_UI is
                  ("ADA ADAPTER")],
               Content_Width,
               Theme);
-         Content : constant Flyology_TUI.Surfaces.Surface :=
+         Content     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Layouts.Join_Vertically
              (Heading,
               Flyology_TUI.Layouts.Join_Vertically
@@ -296,12 +287,12 @@ package body Counterweave.Campaign_UI is
                     Gap => 1),
                  Gap => 1),
               Gap => 1);
-         Panel : constant Flyology_TUI.Layouts.Block :=
+         Panel       : constant Flyology_TUI.Layouts.Block :=
            (Padding    => (Top => 1, Right => 2, Bottom => 1, Left => 2),
             Border     => Flyology_TUI.Layouts.Rounded,
             Appearance => Theme.Border,
             others     => <>);
-         Result : Flyology_TUI.Views.View :=
+         Result      : Flyology_TUI.Views.View :=
            Flyology_TUI.Views.From_Surface
              (Flyology_TUI.Layouts.Render (Panel, Content));
       begin
@@ -312,9 +303,8 @@ package body Counterweave.Campaign_UI is
       end Present;
 
       procedure Execute
-        (Item     : Command;
-         Result   : out Attempt_Result;
-         Produced : out Boolean) is
+        (Item : Command; Result : out Attempt_Result; Produced : out Boolean)
+      is
       begin
          Attempt (Positive (Item), Result);
          Result.Attempt := Natural (Item);
@@ -322,12 +312,14 @@ package body Counterweave.Campaign_UI is
       exception
          when Error : others =>
             Result :=
-              (Outcome => Errored,
-               Attempt => Natural (Item),
-               Seed    => 0,
-               Detail  =>
+              (Outcome             => Errored,
+               Attempt             => Natural (Item),
+               Seed                => 0,
+               Detail              =>
                  To_Unbounded_String
-                   (Ada.Exceptions.Exception_Information (Error)));
+                   (Ada.Exceptions.Exception_Information (Error)),
+               Property_Name       => Null_Unbounded_String,
+               Failure_Fingerprint => Null_Unbounded_String);
             Produced := True;
       end Execute;
 
@@ -341,9 +333,7 @@ package body Counterweave.Campaign_UI is
            Present     => Present,
            Execute     => Execute);
 
-      procedure Run
-        (Final_Result : out Attempt_Result;
-         Attempts     : out Natural)
+      procedure Run (Final_Result : out Attempt_Result; Attempts : out Natural)
       is
       begin
          if Interactive then
@@ -357,12 +347,14 @@ package body Counterweave.Campaign_UI is
                   Final_Result := State.Last;
                else
                   Final_Result :=
-                    (Outcome => Errored,
-                     Attempt => State.Current,
-                     Seed    => 0,
-                     Detail  =>
+                    (Outcome             => Errored,
+                     Attempt             => State.Current,
+                     Seed                => 0,
+                     Detail              =>
                        To_Unbounded_String
-                         ("interactive runner stopped before completion"));
+                         ("interactive runner stopped before completion"),
+                     Property_Name       => Null_Unbounded_String,
+                     Failure_Fingerprint => Null_Unbounded_String);
                end if;
             end;
          else

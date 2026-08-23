@@ -5,6 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 output_dir=${COUNTERWEAVE_OUTPUT_DIR:-/tmp}
 case_file=$output_dir/counterweave-stale-handle.cwcase
 run_file=$output_dir/counterweave-stale-handle.cwrun
+campaign_file=$output_dir/counterweave-stale-handle.cwcampaign
 solver=${COUNTERWEAVE_SOLVER:-cp-sat}
 
 cd "$root"
@@ -24,13 +25,17 @@ bin/counterweave search \
   --intent explore \
   --target released-handles-stay-stale \
   --case-output "$case_file" \
-  --run-output "$run_file"
+  --run-output "$run_file" \
+  --campaign-output "$campaign_file"
 
-grep -q '"outcome": "failed"' "$run_file"
+grep -q '"outcome": "property-violation"' "$run_file"
+grep -q '"fingerprint":"stale-read-accepted"' "$run_file"
 grep -q '"expected_stale":true' "$run_file"
 grep -q '"stale_read_accepted":true' "$run_file"
 grep -q '"index":7,"operation":"read","status":"ok"' "$run_file"
 grep -q '"old_generation": 1,"new_generation": 1' "$run_file"
+grep -q '"status": "property-violation"' "$campaign_file"
+grep -q '"failure_fingerprint":"stale-read-accepted"' "$campaign_file"
 if [ ! -t 1 ]; then
   echo "bug reproduced; evidence: $run_file"
 fi

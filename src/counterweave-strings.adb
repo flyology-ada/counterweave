@@ -51,8 +51,7 @@ package body Counterweave.Strings is
       while not IO.End_Of_File (File) loop
          IO.Read (File, Data, Last);
          declare
-            Chunk_Length : constant Natural :=
-              Natural (Last - Data'First + 1);
+            Chunk_Length : constant Natural := Natural (Last - Data'First + 1);
          begin
             if Chunk_Length > Maximum_Bytes - Total then
                IO.Close (File);
@@ -76,9 +75,9 @@ package body Counterweave.Strings is
    end Read_File;
 
    procedure Write_File_Atomically (Path : String; Content : String) is
-      Serial    : Natural;
-      File      : Ada.Text_IO.File_Type;
-      Renamed   : Boolean;
+      Serial  : Natural;
+      File    : Ada.Text_IO.File_Type;
+      Renamed : Boolean;
    begin
       Temporary_Names.Next (Serial);
       declare
@@ -111,6 +110,18 @@ package body Counterweave.Strings is
             raise;
       end;
    end Write_File_Atomically;
+
+   function Same_Path (Left, Right : String) return Boolean is
+      Normalized_Left  : constant String :=
+        GNAT.OS_Lib.Normalize_Pathname (Left);
+      Normalized_Right : constant String :=
+        GNAT.OS_Lib.Normalize_Pathname (Right);
+   begin
+      return
+        Normalized_Left'Length > 0
+        and then Normalized_Right'Length > 0
+        and then Normalized_Left = Normalized_Right;
+   end Same_Path;
 
    function JSON_String (Value : String) return String is
       Result : Unbounded_String := To_Unbounded_String (String'(1 => '"'));
@@ -203,7 +214,7 @@ package body Counterweave.Strings is
          raise Format_Error with "adapter emitted no JSON value";
       end if;
       declare
-         Clean : constant String := Source (First .. Last);
+         Clean   : constant String := Source (First .. Last);
          Ignored : constant Counterweave.JSON.Value :=
            Counterweave.JSON.Parse (Clean);
       begin
@@ -218,7 +229,8 @@ package body Counterweave.Strings is
    function Find_Integer
      (Source : String; Key : String) return Long_Long_Integer
    is
-      Root : constant Counterweave.JSON.Value := Counterweave.JSON.Parse (Source);
+      Root : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Parse (Source);
    begin
       return
         Counterweave.JSON.As_Integer
@@ -229,7 +241,8 @@ package body Counterweave.Strings is
    end Find_Integer;
 
    function Find_Boolean (Source : String; Key : String) return Boolean is
-      Root : constant Counterweave.JSON.Value := Counterweave.JSON.Parse (Source);
+      Root : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Parse (Source);
    begin
       return
         Counterweave.JSON.As_Boolean
@@ -240,7 +253,8 @@ package body Counterweave.Strings is
    end Find_Boolean;
 
    function Find_String (Source : String; Key : String) return String is
-      Root : constant Counterweave.JSON.Value := Counterweave.JSON.Parse (Source);
+      Root : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Parse (Source);
    begin
       return
         To_String

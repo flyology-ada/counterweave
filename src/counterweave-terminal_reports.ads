@@ -6,6 +6,7 @@ package Counterweave.Terminal_Reports is
      (Result           : Counterweave.Campaign_UI.Attempt_Result;
       Attempts         : Natural;
       Maximum_Attempts : Positive;
+      Campaign_Path    : String;
       Case_Path        : String;
       Run_Path         : String;
       Adapter          : String);

@@ -1,15 +1,22 @@
 with Ada.Command_Line;
+with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Counterweave.Adapter_Results;
 with Counterweave.Artifacts;
+with Counterweave.Campaigns;
 with Counterweave.Choices;
 with Counterweave.Hashes;
 with Counterweave.Processes;
 with Counterweave.Strings;
+with GNAT.OS_Lib;
 
 procedure Counterweave_Tests is
 
    use type Counterweave.Choices.Choice_Value;
+   use type Counterweave.Adapter_Results.Verdict_Kind;
    use type Counterweave.Processes.Outcome_Kind;
 
    Failures : Natural := 0;
@@ -149,7 +156,7 @@ procedure Counterweave_Tests is
 
    procedure Test_JSON is
       Source : constant String :=
-        "{""format"": ""counterweave.case/1"", ""number"": -12, "
+        "{""format"": ""example/1"", ""number"": -12, "
         & """flag"": true, ""nested"": {""x"": 3}}";
    begin
       Check
@@ -159,8 +166,7 @@ procedure Counterweave_Tests is
         (Counterweave.Strings.Find_Boolean (Source, "flag"),
          "extract JSON Boolean");
       Check
-        (Counterweave.Strings.Find_String (Source, "format")
-         = "counterweave.case/1",
+        (Counterweave.Strings.Find_String (Source, "format") = "example/1",
          "extract JSON string");
       Check
         (Counterweave.Strings.Extract_First_JSON
@@ -242,17 +248,108 @@ procedure Counterweave_Tests is
       end;
    end Test_JSON;
 
+   procedure Test_Paths is
+      Current : constant String := Ada.Directories.Current_Directory;
+   begin
+      Check
+        (Counterweave.Strings.Same_Path
+           (Current & "/counterweave-path-test",
+            Current & "/./counterweave-path-test"),
+         "canonicalize equivalent artifact paths");
+      Check
+        (not Counterweave.Strings.Same_Path
+               (Current & "/counterweave-path-test-a",
+                Current & "/counterweave-path-test-b"),
+         "distinguish different artifact paths");
+   end Test_Paths;
+
+   procedure Test_Adapter_Results is
+      Violation_JSON : constant String :=
+        "{""format"":""counterweave.adapter-result/1"","
+        & """pack"":{""name"":""ledger"",""version"":""1""},"
+        & """verdict"":""property-violation"","
+        & """property"":""transfers-are-idempotent"","
+        & """fingerprint"":""duplicate-credit"","
+        & """observations"":{""credited_twice"":true}}";
+      Parsed         : constant Counterweave.Adapter_Results.Adapter_Result :=
+        Counterweave.Adapter_Results.Parse (Violation_JSON, "ledger", "1");
+   begin
+      Check
+        (Parsed.Verdict = Counterweave.Adapter_Results.Property_Violation,
+         "parse semantic adapter verdict independently of process exit");
+      Check
+        (Ada.Strings.Unbounded.To_String (Parsed.Failure_Fingerprint)
+         = "duplicate-credit",
+         "preserve stable failure fingerprint");
+      declare
+         Round_Trip : constant Counterweave.Adapter_Results.Adapter_Result :=
+           Counterweave.Adapter_Results.Parse
+             (Counterweave.Adapter_Results.To_JSON (Parsed), "ledger", "1");
+      begin
+         Check
+           (Round_Trip.Verdict
+            = Counterweave.Adapter_Results.Property_Violation,
+            "round-trip canonical adapter result");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Ignored :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     (Violation_JSON, "another-pack", "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject adapter result for a different model pack");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Ignored :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     ("{""format"":""counterweave.adapter-result/1"","
+                      & """pack"":{""name"":""ledger"",""version"":""1""},"
+                      & """verdict"":""property-violation"","
+                      & """property"":""transfers-are-idempotent"","
+                      & """fingerprint"":null,""observations"":{}}",
+                      "ledger",
+                      "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject property violation without a fingerprint");
+      end;
+   end Test_Adapter_Results;
+
    procedure Test_Artifacts is
-      Path : constant Counterweave.Choices.Fork_Path :=
+      Path  : constant Counterweave.Choices.Fork_Path :=
         Counterweave.Choices.Child (Counterweave.Choices.Root, "artifact", 0);
-      Tape : Counterweave.Choices.Choice_Tape;
+      Tape  : Counterweave.Choices.Choice_Tape;
       Drawn : Counterweave.Choices.Choice_Value;
    begin
       Counterweave.Choices.Start_Recording (Tape, 17);
       Drawn := Counterweave.Choices.Draw (Tape, Path);
       declare
          Source : constant String :=
-           "{""format"":""counterweave.case/1"","
+           "{""format"":""counterweave.case/2"","
            & """pack"":{""name"":""test"",""version"":""1""},"
            & """intent"":{""kind"":""satisfy"",""target"":""unit""},"
            & """provenance"":{""counterweave_version"":""test"","
@@ -260,7 +357,8 @@ procedure Counterweave_Tests is
            & Counterweave.Choices.To_JSON (Tape)
            & ",""model"":{""backend"":""minizinc"",""solver"":""test"","
            & """minizinc_version"":""test"",""model_sha256"":""test"","
-           & """compiled_sha256"":""test""}"
+           & """compiled_sha256"":""test"","
+           & """diversity_seed"":""17""}"
            & "},"
            & """payload"":{""parameters"":{},""solution"":{}}}";
          Loaded : Counterweave.Choices.Choice_Tape;
@@ -278,6 +376,101 @@ procedure Counterweave_Tests is
          end;
       end;
    end Test_Artifacts;
+
+   procedure Test_Run_Classification is
+      Path           : constant String :=
+        "/tmp/counterweave-run-test-"
+        & Counterweave.Strings.Compact_Image
+            (Long_Long_Integer
+               (GNAT.OS_Lib.Pid_To_Integer (GNAT.OS_Lib.Current_Process_Id)))
+        & ".json";
+      Arguments      : Counterweave.Strings.String_Vector;
+      Process        : constant Counterweave.Processes.Process_Result :=
+        (Outcome              => Counterweave.Processes.Failed,
+         Standard_Output      =>
+           Ada.Strings.Unbounded.To_Unbounded_String
+             ("{""verdict"":""property-violation""}"),
+         Standard_Error       =>
+           Ada.Strings.Unbounded.To_Unbounded_String ("adapter crashed"),
+         Elapsed_Milliseconds => 1);
+      Adapter_Result : Counterweave.Adapter_Results.Adapter_Result;
+   begin
+      Counterweave.Artifacts.Write_Run
+        (Path               => Path,
+         Case_Path          => Ada.Command_Line.Command_Name,
+         Adapter            => "failing-adapter",
+         Adapter_SHA256     => "",
+         Arguments          => Arguments,
+         Process            => Process,
+         Has_Adapter_Result => False,
+         Adapter_Result     => Adapter_Result);
+      declare
+         Source : constant String := Counterweave.Strings.Read_File (Path);
+      begin
+         Check
+           (Counterweave.Strings.Find_String (Source, "outcome")
+            = "adapter-error",
+            "adapter process failure is not a property violation");
+      end;
+      Ada.Directories.Delete_File (Path);
+   exception
+      when others =>
+         if Ada.Directories.Exists (Path) then
+            Ada.Directories.Delete_File (Path);
+         end if;
+         raise;
+   end Test_Run_Classification;
+
+   procedure Test_Campaign_Replay is
+      Original : constant String :=
+        "{""format"":""counterweave.campaign/1"","
+        & """root_seed"":""42"",""maximum_trials"":2,"
+        & """status"":""property-violation"",""attempts"":["
+        & "{""index"":1,""seed"":""7"",""outcome"":""pass"","
+        & """property"":""transfers-are-idempotent"","
+        & """failure_fingerprint"":null,""case_replay_sha256"":""a""},"
+        & "{""index"":2,""seed"":""8"","
+        & """outcome"":""property-violation"","
+        & """property"":""transfers-are-idempotent"","
+        & """failure_fingerprint"":""duplicate-credit"","
+        & """case_replay_sha256"":""b""}]}";
+   begin
+      Counterweave.Campaigns.Verify_Replay (Original, Original);
+      Check (True, "verify equivalent campaign replay");
+      declare
+         Changed : String := Original;
+         Raised  : Boolean := False;
+      begin
+         for Index in reverse Changed'Range loop
+            if Changed (Index) = 'b' then
+               Changed (Index) := 'c';
+               exit;
+            end if;
+         end loop;
+         begin
+            Counterweave.Campaigns.Verify_Replay (Original, Changed);
+         exception
+            when Counterweave.Campaigns.Campaign_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject replay with a different semantic case");
+      end;
+      declare
+         Changed : String := Original;
+         First   : constant Positive :=
+           Ada.Strings.Fixed.Index (Changed, "transfers-are-idempotent");
+         Raised  : Boolean := False;
+      begin
+         Changed (First) := 'x';
+         begin
+            Counterweave.Campaigns.Verify_Replay (Original, Changed);
+         exception
+            when Counterweave.Campaigns.Campaign_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject replay with a different property identity");
+      end;
+   end Test_Campaign_Replay;
 
    procedure Test_Streaming_Hash is
       task type Hash_Worker with Storage_Size => 256 * 1_024 is
@@ -297,9 +490,7 @@ procedure Counterweave_Tests is
       Length : Natural;
    begin
       Worker.Result (Length);
-      Check
-        (Length = 64,
-         "hash large executable on a bounded worker stack");
+      Check (Length = 64, "hash large executable on a bounded worker stack");
    end Test_Streaming_Hash;
 
    procedure Test_Processes is
@@ -362,8 +553,7 @@ procedure Counterweave_Tests is
       Arguments.Append ("sleep 5");
       declare
          task Runner is
-            entry Result
-              (Outcome : out Counterweave.Processes.Outcome_Kind);
+            entry Result (Outcome : out Counterweave.Processes.Outcome_Kind);
          end Runner;
 
          task body Runner is
@@ -394,7 +584,11 @@ procedure Counterweave_Tests is
 begin
    Test_Choices;
    Test_JSON;
+   Test_Paths;
+   Test_Adapter_Results;
    Test_Artifacts;
+   Test_Run_Classification;
+   Test_Campaign_Replay;
    Test_Streaming_Hash;
    Test_Processes;
    if Failures /= 0 then

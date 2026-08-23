@@ -7,12 +7,16 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Counterweave.Adapter_Results;
 with Counterweave.Artifacts;
 with Counterweave.Campaign_UI;
+with Counterweave.Campaigns;
 with Counterweave.Choices;
 with Counterweave.Hashes;
+with Counterweave.JSON;
 with Counterweave.MiniZinc;
 with Counterweave.Processes;
+with Counterweave.Reducers;
 with Counterweave.Strings;
 with Counterweave.Terminal_UI;
 with Counterweave.Terminal_Reports;
@@ -23,6 +27,7 @@ procedure Counterweave_Main is
 
    use Ada.Strings.Unbounded;
    use type Ada.Calendar.Time;
+   use type Counterweave.Adapter_Results.Verdict_Kind;
    use type Counterweave.Processes.Outcome_Kind;
    use type Interfaces.Unsigned_64;
 
@@ -157,7 +162,13 @@ procedure Counterweave_Main is
          & "--output RUN [--adapter-arg ARG]");
       Ada.Text_IO.Put_Line
         ("counterweave search --model MODEL --adapter PROGRAM --draw ... "
-         & "--case-output CASE --run-output RUN");
+         & "--case-output CASE --run-output RUN --campaign-output CAMPAIGN");
+      Ada.Text_IO.Put_Line
+        ("counterweave replay-campaign --campaign CAMPAIGN "
+         & "--case-output CASE --run-output RUN --campaign-output CAMPAIGN");
+      Ada.Text_IO.Put_Line
+        ("counterweave reduce --campaign CAMPAIGN --case-output CASE "
+         & "--run-output RUN --report-output REPORT");
       Ada.Text_IO.Put_Line ("counterweave inspect CASE");
    end Usage;
 
@@ -256,6 +267,8 @@ procedure Counterweave_Main is
          Data_Content    : Unbounded_String;
          Parameters_JSON : Unbounded_String := To_Unbounded_String ("{");
          First           : Boolean := True;
+         Raw_Seed        : Interfaces.Unsigned_64;
+         Diversity_Seed  : Interfaces.Unsigned_64;
       begin
          Counterweave.Choices.Start_Recording (Tape, Seed_Value);
          if Length (Base_Data_Path) > 0 then
@@ -298,15 +311,24 @@ procedure Counterweave_Main is
             end;
          end loop;
          Append (Parameters_JSON, "}");
+         declare
+            Seed_Path : constant Counterweave.Choices.Fork_Path :=
+              Counterweave.Choices.Child
+                (Counterweave.Choices.Root, "completion", 0);
+         begin
+            Raw_Seed := Counterweave.Choices.Draw (Tape, Seed_Path);
+            Diversity_Seed := Raw_Seed mod 2**31;
+         end;
+         Append
+           (Data_Content,
+            "counterweave_diversity_seed = "
+            & Counterweave.Strings.Compact_Image (Diversity_Seed)
+            & ";"
+            & ASCII.LF);
          Counterweave.Strings.Write_File_Atomically
            (Data_Path, To_String (Data_Content));
 
          declare
-            Seed_Path  : constant Counterweave.Choices.Fork_Path :=
-              Counterweave.Choices.Child
-                (Counterweave.Choices.Root, "completion", 0);
-            Raw_Seed   : constant Interfaces.Unsigned_64 :=
-              Counterweave.Choices.Draw (Tape, Seed_Path);
             Solution   : constant Counterweave.MiniZinc.Solution_Result :=
               Counterweave.MiniZinc.Solve_One
                 (Model_Path           => To_String (Model_Path),
@@ -334,6 +356,7 @@ procedure Counterweave_Main is
                     To_Unbounded_String
                       (Counterweave.Hashes.SHA256_File
                          (To_String (Base_Data_Path)))),
+               Diversity_Seed   => Diversity_Seed,
                Solver_Seed      => Solution.Applied_Seed,
                Seed_Applied     => Solution.Seed_Applied,
                Parameters_JSON  => Parameters_JSON,
@@ -403,33 +426,50 @@ procedure Counterweave_Main is
          raise Constraint_Error
            with "execute requires --case, --adapter, and --output";
       end if;
-      Counterweave.Artifacts.Validate_Case
-        (Counterweave.Strings.Read_File (To_String (Case_Path)));
-      Arguments.Prepend (To_String (Case_Path));
-      Arguments.Prepend ("--case");
       declare
-         Adapter_Hash : constant String :=
+         Case_Source        : constant String :=
+           Counterweave.Strings.Read_File (To_String (Case_Path));
+         Pack_Name          : Unbounded_String;
+         Pack_Version       : Unbounded_String;
+         Adapter_Hash       : constant String :=
            Counterweave.Artifacts.Executable_SHA256 (To_String (Adapter));
-         Result : Counterweave.Processes.Process_Result :=
+         Process            : Counterweave.Processes.Process_Result;
+         Adapter_Result     : Counterweave.Adapter_Results.Adapter_Result;
+         Has_Adapter_Result : Boolean := False;
+      begin
+         Counterweave.Artifacts.Validate_Case (Case_Source);
+         Counterweave.Artifacts.Case_Pack
+           (Case_Source, Pack_Name, Pack_Version);
+         Arguments.Prepend (To_String (Case_Path));
+         Arguments.Prepend ("--case");
+         Process :=
            Counterweave.Processes.Run
              (To_String (Adapter), Arguments, Timeout);
-      begin
-         if Result.Outcome
-           in Counterweave.Processes.Completed | Counterweave.Processes.Failed
-         then
+
+         if Process.Outcome = Counterweave.Processes.Completed then
             begin
                declare
-                  Observation : constant String :=
+                  Protocol_JSON : constant String :=
                     Counterweave.Strings.Extract_Only_JSON
-                      (To_String (Result.Standard_Output));
+                      (To_String (Process.Standard_Output));
                begin
-                  if Observation'Length = 0 then
-                     Result.Outcome := Counterweave.Processes.Protocol_Error;
-                  end if;
+                  Adapter_Result :=
+                    Counterweave.Adapter_Results.Parse
+                      (Source                => Protocol_JSON,
+                       Expected_Pack_Name    => To_String (Pack_Name),
+                       Expected_Pack_Version => To_String (Pack_Version));
+                  Has_Adapter_Result := True;
                end;
             exception
-               when Counterweave.Strings.Format_Error =>
-                  Result.Outcome := Counterweave.Processes.Protocol_Error;
+               when
+                 Error :
+                   Counterweave.Strings.Format_Error
+                   | Counterweave.Adapter_Results.Protocol_Error
+               =>
+                  Process.Outcome := Counterweave.Processes.Protocol_Error;
+                  Append
+                    (Process.Standard_Error,
+                     Ada.Exceptions.Exception_Message (Error));
             end;
          end if;
          declare
@@ -437,26 +477,36 @@ procedure Counterweave_Main is
               Counterweave.Artifacts.Executable_SHA256 (To_String (Adapter));
          begin
             if Adapter_Hash'Length > 0 and then After_Hash /= Adapter_Hash then
-               Result.Outcome := Counterweave.Processes.Protocol_Error;
+               Process.Outcome := Counterweave.Processes.Protocol_Error;
+               Has_Adapter_Result := False;
                Append
-                 (Result.Standard_Error,
+                 (Process.Standard_Error,
                   "adapter executable changed during execution");
             end if;
          end;
          Counterweave.Artifacts.Write_Run
-           (Path      => To_String (Output_Path),
-            Case_Path => To_String (Case_Path),
-            Adapter   => To_String (Adapter),
-            Adapter_SHA256 => Adapter_Hash,
-            Arguments => Arguments,
-            Result    => Result);
+           (Path               => To_String (Output_Path),
+            Case_Path          => To_String (Case_Path),
+            Adapter            => To_String (Adapter),
+            Adapter_SHA256     => Adapter_Hash,
+            Arguments          => Arguments,
+            Process            => Process,
+            Has_Adapter_Result => Has_Adapter_Result,
+            Adapter_Result     => Adapter_Result);
          Status_Line
            ("wrote "
             & To_String (Output_Path)
             & " ("
-            & Counterweave.Processes.Outcome_Kind'Image (Result.Outcome)
+            & (if Has_Adapter_Result
+               then Counterweave.Adapter_Results.Image (Adapter_Result.Verdict)
+               else
+                 Counterweave.Processes.Outcome_Kind'Image (Process.Outcome))
             & ")");
-         if Result.Outcome /= Counterweave.Processes.Completed then
+         if Process.Outcome /= Counterweave.Processes.Completed
+           or else not Has_Adapter_Result
+           or else Adapter_Result.Verdict
+                   /= Counterweave.Adapter_Results.Passed
+         then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
@@ -473,6 +523,7 @@ procedure Counterweave_Main is
       Adapter         : Unbounded_String;
       Case_Output     : Unbounded_String;
       Run_Output      : Unbounded_String;
+      Campaign_Output : Unbounded_String;
       Seed_Value      : Interfaces.Unsigned_64 := 0;
       Seed_Was_Set    : Boolean := False;
       Maximum_Trials  : Positive := 64;
@@ -513,16 +564,22 @@ procedure Counterweave_Main is
                Pack_Version :=
                  To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--intent" then
-               Intent := To_Unbounded_String (Value_After (Position, Argument));
+               Intent :=
+                 To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--target" then
-               Target := To_Unbounded_String (Value_After (Position, Argument));
+               Target :=
+                 To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--adapter" then
-               Adapter := To_Unbounded_String (Value_After (Position, Argument));
+               Adapter :=
+                 To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--case-output" then
                Case_Output :=
                  To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--run-output" then
                Run_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--campaign-output" then
+               Campaign_Output :=
                  To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--seed" then
                declare
@@ -572,11 +629,12 @@ procedure Counterweave_Main is
         or else Length (Adapter) = 0
         or else Length (Case_Output) = 0
         or else Length (Run_Output) = 0
+        or else Length (Campaign_Output) = 0
       then
          raise Constraint_Error
            with
              "search requires --model, --pack, --adapter, --case-output, "
-             & "and --run-output";
+             & "--run-output, and --campaign-output";
       end if;
       if not Seed_Was_Set then
          Seed_Value := Entropy_Seed;
@@ -584,26 +642,64 @@ procedure Counterweave_Main is
 
       declare
          Campaign_Tape : Counterweave.Choices.Choice_Tape;
+         Campaign_Log  : Counterweave.Campaigns.Campaign_Log;
 
          procedure Attempt
            (Index  : Positive;
             Result : out Counterweave.Campaign_UI.Attempt_Result)
          is
-            Path       : constant Counterweave.Choices.Fork_Path :=
+            Path               : constant Counterweave.Choices.Fork_Path :=
               Counterweave.Choices.Child
                 (Counterweave.Choices.Child
                    (Counterweave.Choices.Root, "campaign", 0),
                  "trial",
                  Interfaces.Unsigned_64 (Index - 1));
-            Trial_Seed : constant Interfaces.Unsigned_64 :=
+            Trial_Seed         : constant Interfaces.Unsigned_64 :=
               Counterweave.Choices.Draw (Campaign_Tape, Path);
             Generate_Arguments : Counterweave.Strings.String_Vector;
+            Recorded           : Boolean := False;
+
+            function Outcome_Image return String
+            is (case Result.Outcome is
+                  when Counterweave.Campaign_UI.Passed    => "pass",
+                  when Counterweave.Campaign_UI.Found     =>
+                    "property-violation",
+                  when Counterweave.Campaign_UI.Cancelled => "cancelled",
+                  when Counterweave.Campaign_UI.Errored   =>
+                    "infrastructure-error");
+
+            procedure Record_Attempt is
+            begin
+               Recorded := True;
+               Counterweave.Campaigns.Append_Attempt
+                 (Log                 => Campaign_Log,
+                  Index               => Index,
+                  Seed                => Trial_Seed,
+                  Outcome             => Outcome_Image,
+                  Detail              => To_String (Result.Detail),
+                  Property_Name       => To_String (Result.Property_Name),
+                  Failure_Fingerprint =>
+                    To_String (Result.Failure_Fingerprint),
+                  Case_Path           => To_String (Case_Output),
+                  Run_Path            => To_String (Run_Output));
+               Counterweave.Campaigns.Write
+                 (To_String (Campaign_Output), Campaign_Log);
+            end Record_Attempt;
          begin
             Result :=
-              (Outcome => Counterweave.Campaign_UI.Errored,
-               Attempt => Index,
-               Seed    => Trial_Seed,
-               Detail  => Null_Unbounded_String);
+              (Outcome             => Counterweave.Campaign_UI.Errored,
+               Attempt             => Index,
+               Seed                => Trial_Seed,
+               Detail              => Null_Unbounded_String,
+               Property_Name       => Null_Unbounded_String,
+               Failure_Fingerprint => Null_Unbounded_String);
+
+            if Ada.Directories.Exists (To_String (Case_Output)) then
+               Ada.Directories.Delete_File (To_String (Case_Output));
+            end if;
+            if Ada.Directories.Exists (To_String (Run_Output)) then
+               Ada.Directories.Delete_File (To_String (Run_Output));
+            end if;
 
             Generate_Arguments.Append ("generate");
             Generate_Arguments.Append ("--model");
@@ -645,12 +741,15 @@ procedure Counterweave_Main is
             begin
                if Generated.Outcome = Counterweave.Processes.Cancelled then
                   Result.Outcome := Counterweave.Campaign_UI.Cancelled;
-                  Result.Detail := To_Unbounded_String ("generation cancelled");
+                  Result.Detail :=
+                    To_Unbounded_String ("generation cancelled");
+                  Record_Attempt;
                   return;
                elsif Generated.Outcome /= Counterweave.Processes.Completed then
                   Result.Detail :=
                     To_Unbounded_String
                       ("generation failed: " & Process_Detail (Generated));
+                  Record_Attempt;
                   return;
                end if;
             end;
@@ -686,42 +785,98 @@ procedure Counterweave_Main is
                begin
                   if Executed.Outcome = Counterweave.Processes.Cancelled then
                      Result.Outcome := Counterweave.Campaign_UI.Cancelled;
-                     Result.Detail := To_Unbounded_String ("execution cancelled");
+                     Result.Detail :=
+                       To_Unbounded_String ("execution cancelled");
+                     Record_Attempt;
                      return;
                   elsif Executed.Outcome
-                    not in Counterweave.Processes.Completed
-                           | Counterweave.Processes.Failed
+                        not in Counterweave.Processes.Completed
+                             | Counterweave.Processes.Failed
                   then
                      Result.Detail :=
                        To_Unbounded_String
                          ("execution failed: " & Process_Detail (Executed));
+                     Record_Attempt;
                      return;
-                  elsif not Ada.Directories.Exists (To_String (Run_Output)) then
+                  elsif not Ada.Directories.Exists (To_String (Run_Output))
+                  then
                      Result.Detail :=
                        To_Unbounded_String
                          ("execution produced no run artifact");
+                     Record_Attempt;
                      return;
                   end if;
 
                   declare
+                     Run_Source  : constant String :=
+                       Counterweave.Strings.Read_File (To_String (Run_Output));
+                     Run_Root    : constant Counterweave.JSON.Value :=
+                       Counterweave.JSON.Parse (Run_Source);
                      Run_Outcome : constant String :=
                        Counterweave.Strings.Find_String
-                         (Counterweave.Strings.Read_File
-                            (To_String (Run_Output)),
-                          "outcome");
+                         (Run_Source, "outcome");
                   begin
                      if Executed.Outcome = Counterweave.Processes.Completed
-                       and then Run_Outcome = "completed"
+                       and then Run_Outcome = "pass"
                      then
-                        Result.Outcome := Counterweave.Campaign_UI.Passed;
-                        Result.Detail :=
-                          To_Unbounded_String ("property held");
+                        declare
+                           Adapter_Node : constant Counterweave.JSON.Value :=
+                             Counterweave.JSON.Member
+                               (Run_Source, Run_Root, "adapter_result");
+                           Protocol     :
+                             constant Counterweave
+                                        .Adapter_Results
+                                        .Adapter_Result :=
+                               Counterweave.Adapter_Results.Parse
+                                 (Counterweave.JSON.Image
+                                    (Run_Source, Adapter_Node),
+                                  To_String (Pack),
+                                  To_String (Pack_Version));
+                        begin
+                           if Protocol.Verdict
+                             /= Counterweave.Adapter_Results.Passed
+                           then
+                              raise Counterweave.Adapter_Results.Protocol_Error
+                                with
+                                  "run outcome disagrees with adapter verdict";
+                           end if;
+                           Result.Outcome := Counterweave.Campaign_UI.Passed;
+                           Result.Property_Name := Protocol.Property_Name;
+                           Result.Detail :=
+                             To_Unbounded_String ("property held");
+                        end;
                      elsif Executed.Outcome = Counterweave.Processes.Failed
-                       and then Run_Outcome = "failed"
+                       and then Run_Outcome = "property-violation"
                      then
-                        Result.Outcome := Counterweave.Campaign_UI.Found;
-                        Result.Detail :=
-                          To_Unbounded_String ("property violation retained");
+                        declare
+                           Adapter_Node : constant Counterweave.JSON.Value :=
+                             Counterweave.JSON.Member
+                               (Run_Source, Run_Root, "adapter_result");
+                           Protocol     :
+                             constant Counterweave
+                                        .Adapter_Results
+                                        .Adapter_Result :=
+                               Counterweave.Adapter_Results.Parse
+                                 (Counterweave.JSON.Image
+                                    (Run_Source, Adapter_Node),
+                                  To_String (Pack),
+                                  To_String (Pack_Version));
+                        begin
+                           if Protocol.Verdict
+                             /= Counterweave.Adapter_Results.Property_Violation
+                           then
+                              raise Counterweave.Adapter_Results.Protocol_Error
+                                with
+                                  "run outcome disagrees with adapter verdict";
+                           end if;
+                           Result.Outcome := Counterweave.Campaign_UI.Found;
+                           Result.Detail :=
+                             To_Unbounded_String
+                               ("property violation retained");
+                           Result.Property_Name := Protocol.Property_Name;
+                           Result.Failure_Fingerprint :=
+                             Protocol.Failure_Fingerprint;
+                        end;
                      else
                         Result.Detail :=
                           To_Unbounded_String
@@ -730,6 +885,19 @@ procedure Counterweave_Main is
                   end;
                end;
             end;
+            Record_Attempt;
+         exception
+            when Error : others =>
+               if Recorded then
+                  raise;
+               end if;
+               Result.Outcome := Counterweave.Campaign_UI.Errored;
+               Result.Detail :=
+                 To_Unbounded_String
+                   (Ada.Exceptions.Exception_Information (Error));
+               Result.Property_Name := Null_Unbounded_String;
+               Result.Failure_Fingerprint := Null_Unbounded_String;
+               Record_Attempt;
          end Attempt;
 
          package Campaign is new
@@ -742,28 +910,64 @@ procedure Counterweave_Main is
          Attempts     : Natural;
       begin
          Counterweave.Choices.Start_Recording (Campaign_Tape, Seed_Value);
+         Counterweave.Campaigns.Start
+           (Log               => Campaign_Log,
+            Root_Seed         => Seed_Value,
+            Maximum_Trials    => Maximum_Trials,
+            Model_Path        => To_String (Model_Path),
+            Data_Path         => To_String (Base_Data_Path),
+            Solver            => To_String (Solver),
+            Pack_Name         => To_String (Pack),
+            Pack_Version      => To_String (Pack_Version),
+            Intent            => To_String (Intent),
+            Target            => To_String (Target),
+            Adapter           => To_String (Adapter),
+            Draws             => Draw_Arguments,
+            Adapter_Arguments => Adapter_Args,
+            Solver_Timeout    => Solver_Timeout,
+            Adapter_Timeout   => Adapter_Timeout,
+            Case_Output       => To_String (Case_Output),
+            Run_Output        => To_String (Run_Output));
+         Counterweave.Campaigns.Write
+           (To_String (Campaign_Output), Campaign_Log);
          Campaign.Run (Final_Result, Attempts);
+         Counterweave.Campaigns.Set_Status
+           (Campaign_Log,
+            (case Final_Result.Outcome is
+               when Counterweave.Campaign_UI.Found     => "property-violation",
+               when Counterweave.Campaign_UI.Passed    => "exhausted",
+               when Counterweave.Campaign_UI.Cancelled => "cancelled",
+               when Counterweave.Campaign_UI.Errored   =>
+                 "infrastructure-error"));
+         Counterweave.Campaigns.Write
+           (To_String (Campaign_Output), Campaign_Log);
          if Counterweave.Campaign_UI.Interactive then
             Counterweave.Terminal_Reports.Render_Search_Result
               (Result           => Final_Result,
                Attempts         => Attempts,
                Maximum_Attempts => Maximum_Trials,
+               Campaign_Path    => To_String (Campaign_Output),
                Case_Path        => To_String (Case_Output),
                Run_Path         => To_String (Run_Output),
                Adapter          => To_String (Adapter));
          end if;
          case Final_Result.Outcome is
-            when Counterweave.Campaign_UI.Found =>
+            when Counterweave.Campaign_UI.Found     =>
                if not Counterweave.Campaign_UI.Interactive then
                   Ada.Text_IO.Put_Line
                     ("found property violation after "
                      & Counterweave.Strings.Compact_Image
                          (Long_Long_Integer (Attempts))
                      & " constraint-valid trials");
+                  Ada.Text_IO.Put_Line ("case: " & To_String (Case_Output));
+                  Ada.Text_IO.Put_Line ("run:  " & To_String (Run_Output));
                   Ada.Text_IO.Put_Line
-                    ("case: " & To_String (Case_Output));
+                    ("campaign: " & To_String (Campaign_Output));
                   Ada.Text_IO.Put_Line
-                    ("run:  " & To_String (Run_Output));
+                    ("property: " & To_String (Final_Result.Property_Name));
+                  Ada.Text_IO.Put_Line
+                    ("fingerprint: "
+                     & To_String (Final_Result.Failure_Fingerprint));
                   Ada.Text_IO.Put_Line
                     ("replay: "
                      & Ada.Command_Line.Command_Name
@@ -774,7 +978,8 @@ procedure Counterweave_Main is
                      & " --output "
                      & To_String (Run_Output));
                end if;
-            when Counterweave.Campaign_UI.Passed =>
+
+            when Counterweave.Campaign_UI.Passed    =>
                if not Counterweave.Campaign_UI.Interactive then
                   Ada.Text_IO.Put_Line
                     ("no property violation found in "
@@ -783,12 +988,14 @@ procedure Counterweave_Main is
                      & " constraint-valid trials");
                end if;
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+
             when Counterweave.Campaign_UI.Cancelled =>
                if not Counterweave.Campaign_UI.Interactive then
                   Ada.Text_IO.Put_Line ("search cancelled");
                end if;
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-            when Counterweave.Campaign_UI.Errored =>
+
+            when Counterweave.Campaign_UI.Errored   =>
                if not Counterweave.Campaign_UI.Interactive then
                   Ada.Text_IO.Put_Line
                     (Ada.Text_IO.Standard_Error,
@@ -799,6 +1006,174 @@ procedure Counterweave_Main is
       end;
    end Search;
 
+   procedure Replay_Campaign is
+      Source_Path     : Unbounded_String;
+      Case_Output     : Unbounded_String;
+      Run_Output      : Unbounded_String;
+      Campaign_Output : Unbounded_String;
+      Position        : Positive := 2;
+   begin
+      while Position <= Ada.Command_Line.Argument_Count loop
+         declare
+            Argument : constant String := Ada.Command_Line.Argument (Position);
+         begin
+            if Argument = "--campaign" then
+               Source_Path :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--case-output" then
+               Case_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--run-output" then
+               Run_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--campaign-output" then
+               Campaign_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            else
+               raise Constraint_Error
+                 with "unknown replay-campaign option: " & Argument;
+            end if;
+            Position := Position + 1;
+         end;
+      end loop;
+      if Length (Source_Path) = 0
+        or else Length (Case_Output) = 0
+        or else Length (Run_Output) = 0
+        or else Length (Campaign_Output) = 0
+      then
+         raise Constraint_Error
+           with
+             "replay-campaign requires --campaign, --case-output, "
+             & "--run-output, and --campaign-output";
+      elsif Counterweave.Strings.Same_Path
+              (To_String (Source_Path), To_String (Case_Output))
+        or else Counterweave.Strings.Same_Path
+                  (To_String (Source_Path), To_String (Run_Output))
+        or else Counterweave.Strings.Same_Path
+                  (To_String (Source_Path), To_String (Campaign_Output))
+        or else Counterweave.Strings.Same_Path
+                  (To_String (Case_Output), To_String (Run_Output))
+        or else Counterweave.Strings.Same_Path
+                  (To_String (Case_Output), To_String (Campaign_Output))
+        or else Counterweave.Strings.Same_Path
+                  (To_String (Run_Output), To_String (Campaign_Output))
+      then
+         raise Constraint_Error
+           with "replay outputs must be distinct from their source";
+      end if;
+
+      declare
+         Source       : constant String :=
+           Counterweave.Strings.Read_File (To_String (Source_Path));
+         Arguments    : constant Counterweave.Strings.String_Vector :=
+           Counterweave.Campaigns.Replay_Arguments
+             (Source          => Source,
+              Case_Output     => To_String (Case_Output),
+              Run_Output      => To_String (Run_Output),
+              Campaign_Output => To_String (Campaign_Output));
+         OS_Arguments :
+           GNAT.OS_Lib.Argument_List (1 .. Natural (Arguments.Length)) :=
+             [others => null];
+         Index        : Positive := OS_Arguments'First;
+         Return_Code  : Integer;
+         Released     : Boolean := False;
+
+         procedure Release_Arguments is
+         begin
+            if not Released then
+               for Argument of OS_Arguments loop
+                  GNAT.OS_Lib.Free (Argument);
+               end loop;
+               Released := True;
+            end if;
+         end Release_Arguments;
+      begin
+         for Argument of Arguments loop
+            OS_Arguments (Index) := new String'(Argument);
+            Index := Index + 1;
+         end loop;
+         if Ada.Directories.Exists (To_String (Case_Output)) then
+            Ada.Directories.Delete_File (To_String (Case_Output));
+         end if;
+         if Ada.Directories.Exists (To_String (Run_Output)) then
+            Ada.Directories.Delete_File (To_String (Run_Output));
+         end if;
+         if Ada.Directories.Exists (To_String (Campaign_Output)) then
+            Ada.Directories.Delete_File (To_String (Campaign_Output));
+         end if;
+         Return_Code :=
+           GNAT.OS_Lib.Spawn (Ada.Command_Line.Command_Name, OS_Arguments);
+         Release_Arguments;
+         if Ada.Directories.Exists (To_String (Campaign_Output)) then
+            Counterweave.Campaigns.Verify_Replay
+              (Original => Source,
+               Replayed =>
+                 Counterweave.Strings.Read_File (To_String (Campaign_Output)));
+            Ada.Text_IO.Put_Line ("campaign replay verified");
+         else
+            raise Counterweave.Campaigns.Campaign_Error
+              with "replay produced no campaign artifact";
+         end if;
+         if Return_Code /= 0 then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      exception
+         when others =>
+            Release_Arguments;
+            raise;
+      end;
+   end Replay_Campaign;
+
+   procedure Reduce_Campaign is
+      Campaign_Path : Unbounded_String;
+      Case_Output   : Unbounded_String;
+      Run_Output    : Unbounded_String;
+      Report_Output : Unbounded_String;
+      Position      : Positive := 2;
+   begin
+      while Position <= Ada.Command_Line.Argument_Count loop
+         declare
+            Argument : constant String := Ada.Command_Line.Argument (Position);
+         begin
+            if Argument = "--campaign" then
+               Campaign_Path :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--case-output" then
+               Case_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--run-output" then
+               Run_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--report-output" then
+               Report_Output :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            else
+               raise Constraint_Error
+                 with "unknown reduce option: " & Argument;
+            end if;
+            Position := Position + 1;
+         end;
+      end loop;
+      if Length (Campaign_Path) = 0
+        or else Length (Case_Output) = 0
+        or else Length (Run_Output) = 0
+        or else Length (Report_Output) = 0
+      then
+         raise Constraint_Error
+           with
+             "reduce requires --campaign, --case-output, --run-output, "
+             & "and --report-output";
+      end if;
+      Counterweave.Reducers.Reduce
+        (Campaign_Path => To_String (Campaign_Path),
+         Executable    => Ada.Command_Line.Command_Name,
+         Case_Output   => To_String (Case_Output),
+         Run_Output    => To_String (Run_Output),
+         Report_Output => To_String (Report_Output));
+      Status_Line ("reduced counterexample: " & To_String (Case_Output));
+      Status_Line ("reduction report: " & To_String (Report_Output));
+   end Reduce_Campaign;
+
 begin
    if Ada.Command_Line.Argument_Count = 0 then
       Usage;
@@ -807,7 +1182,8 @@ begin
       declare
          package UI is new
            Counterweave.Terminal_UI
-             (Title => "Generating a constraint-valid case", Action => Generate);
+             (Title  => "Generating a constraint-valid case",
+              Action => Generate);
       begin
          Interactive_Status := UI.Interactive;
          UI.Run;
@@ -817,7 +1193,8 @@ begin
       declare
          package UI is new
            Counterweave.Terminal_UI
-             (Title => "Executing generated Ada steps", Action => Execute);
+             (Title  => "Executing generated Ada steps",
+              Action => Execute);
       begin
          Interactive_Status := UI.Interactive;
          UI.Run;
@@ -825,6 +1202,19 @@ begin
       end;
    elsif Ada.Command_Line.Argument (1) = "search" then
       Search;
+   elsif Ada.Command_Line.Argument (1) = "replay-campaign" then
+      Replay_Campaign;
+   elsif Ada.Command_Line.Argument (1) = "reduce" then
+      declare
+         package UI is new
+           Counterweave.Terminal_UI
+             (Title  => "Shrinking a system-valid counterexample",
+              Action => Reduce_Campaign);
+      begin
+         Interactive_Status := UI.Interactive;
+         UI.Run;
+         Flush_Status;
+      end;
    elsif Ada.Command_Line.Argument (1) = "inspect" then
       if Ada.Command_Line.Argument_Count /= 2 then
          raise Constraint_Error with "inspect requires one case path";

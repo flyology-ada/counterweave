@@ -16,6 +16,8 @@ package Counterweave.Strings is
 
    procedure Write_File_Atomically (Path : String; Content : String);
 
+   function Same_Path (Left, Right : String) return Boolean;
+
    function JSON_String (Value : String) return String;
 
    function Compact_Image (Value : Long_Long_Integer) return String;

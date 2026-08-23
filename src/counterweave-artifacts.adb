@@ -17,7 +17,7 @@ package body Counterweave.Artifacts is
             return "completed";
 
          when Counterweave.Processes.Failed         =>
-            return "failed";
+            return "adapter-error";
 
          when Counterweave.Processes.Timed_Out      =>
             return "timeout";
@@ -36,18 +36,10 @@ package body Counterweave.Artifacts is
       end case;
    end Outcome_Image;
 
-   function Observation_JSON (Output : String) return String is
-   begin
-      if Output'Length = 0 then
-         return "null";
-      end if;
-      return Counterweave.Strings.Extract_Only_JSON (Output);
-   end Observation_JSON;
-
-   function Optional_Hash (Value : Unbounded_String) return String is
-     (if Length (Value) = 0
-      then "null"
-      else Counterweave.Strings.JSON_String (To_String (Value)));
+   function Optional_Hash (Value : Unbounded_String) return String
+   is (if Length (Value) = 0
+       then "null"
+       else Counterweave.Strings.JSON_String (To_String (Value)));
 
    function Arguments_JSON
      (Arguments : Counterweave.Strings.String_Vector) return String
@@ -100,7 +92,7 @@ package body Counterweave.Artifacts is
       Content     : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.case/1"","
+        & "  ""format"": ""counterweave.case/2"","
         & ASCII.LF
         & "  ""pack"": {""name"": "
         & Counterweave.Strings.JSON_String (To_String (Data.Pack_Name))
@@ -131,10 +123,12 @@ package body Counterweave.Artifacts is
         & ", ""model_sha256"": "
         & Counterweave.Strings.JSON_String (To_String (Data.Model_SHA256))
         & ", ""compiled_sha256"": "
-        & Counterweave.Strings.JSON_String
-            (To_String (Data.Compiled_SHA256))
+        & Counterweave.Strings.JSON_String (To_String (Data.Compiled_SHA256))
         & ", ""data_sha256"": "
         & Optional_Hash (Data.Data_SHA256)
+        & ", ""diversity_seed"": "
+        & Counterweave.Strings.JSON_String
+            (Counterweave.Strings.Compact_Image (Data.Diversity_Seed))
         & ", ""solver_seed"": "
         & Solver_Seed
         & "}"
@@ -180,6 +174,68 @@ package body Counterweave.Artifacts is
           (Counterweave.JSON.Image (Source, Choices));
    end Choices_From_Case;
 
+   function Case_Replay_SHA256 (Source : String) return String is
+      Root        : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Parse (Source);
+      Pack        : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Root, "pack");
+      Intent      : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Root, "intent");
+      Provenance  : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Root, "provenance");
+      Choices     : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Provenance, "choices");
+      Model       : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Provenance, "model");
+      Payload     : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Root, "payload");
+      Stable_View : constant String :=
+        "{""pack"":"
+        & Counterweave.JSON.Image (Source, Pack)
+        & ",""intent"":"
+        & Counterweave.JSON.Image (Source, Intent)
+        & ",""choices"":"
+        & Counterweave.JSON.Image (Source, Choices)
+        & ",""model_sha256"":"
+        & Counterweave.JSON.Image
+            (Source, Counterweave.JSON.Member (Source, Model, "model_sha256"))
+        & ",""diversity_seed"":"
+        & Counterweave.JSON.Image
+            (Source,
+             Counterweave.JSON.Member (Source, Model, "diversity_seed"))
+        & ",""payload"":"
+        & Counterweave.JSON.Image (Source, Payload)
+        & "}";
+   begin
+      return Counterweave.Hashes.SHA256 (Stable_View);
+   exception
+      when Counterweave.JSON.JSON_Error =>
+         raise Counterweave.Strings.Format_Error
+           with "malformed case replay identity";
+   end Case_Replay_SHA256;
+
+   procedure Case_Pack
+     (Source  : String;
+      Name    : out Unbounded_String;
+      Version : out Unbounded_String)
+   is
+      Root : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Parse (Source);
+      Pack : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member (Source, Root, "pack");
+   begin
+      Name :=
+        Counterweave.JSON.As_String
+          (Source, Counterweave.JSON.Member (Source, Pack, "name"));
+      Version :=
+        Counterweave.JSON.As_String
+          (Source, Counterweave.JSON.Member (Source, Pack, "version"));
+   exception
+      when Counterweave.JSON.JSON_Error =>
+         raise Counterweave.Strings.Format_Error
+           with "malformed case pack identity";
+   end Case_Pack;
+
    procedure Validate_Case (Source : String) is
       Root       : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Parse (Source);
@@ -199,11 +255,12 @@ package body Counterweave.Artifacts is
              (Source, Counterweave.JSON.Member (Source, Root, "format")));
       Ignored    : Unbounded_String;
    begin
-      if Format /= "counterweave.case/1" then
+      if Format /= "counterweave.case/2" then
          raise Counterweave.Strings.Format_Error
            with "unsupported case artifact format";
       elsif Counterweave.JSON.Kind (Pack) /= Counterweave.JSON.Object_Value
-        or else Counterweave.JSON.Kind (Intent) /= Counterweave.JSON.Object_Value
+        or else Counterweave.JSON.Kind (Intent)
+                /= Counterweave.JSON.Object_Value
         or else Counterweave.JSON.Kind (Provenance)
                 /= Counterweave.JSON.Object_Value
         or else Counterweave.JSON.Kind (Model)
@@ -248,6 +305,9 @@ package body Counterweave.Artifacts is
         Counterweave.JSON.As_String
           (Source,
            Counterweave.JSON.Member (Source, Model, "compiled_sha256"));
+      Ignored :=
+        Counterweave.JSON.As_String
+          (Source, Counterweave.JSON.Member (Source, Model, "diversity_seed"));
       declare
          Tape : constant Counterweave.Choices.Choice_Tape :=
            Choices_From_Case (Source);
@@ -262,22 +322,29 @@ package body Counterweave.Artifacts is
       end if;
    exception
       when Counterweave.JSON.JSON_Error | Counterweave.Choices.Choice_Error =>
-         raise Counterweave.Strings.Format_Error with "malformed case artifact";
+         raise Counterweave.Strings.Format_Error
+           with "malformed case artifact";
    end Validate_Case;
 
    procedure Write_Run
-     (Path      : String;
-      Case_Path : String;
-      Adapter   : String;
-      Adapter_SHA256 : String;
-      Arguments : Counterweave.Strings.String_Vector;
-      Result    : Counterweave.Processes.Process_Result)
+     (Path               : String;
+      Case_Path          : String;
+      Adapter            : String;
+      Adapter_SHA256     : String;
+      Arguments          : Counterweave.Strings.String_Vector;
+      Process            : Counterweave.Processes.Process_Result;
+      Has_Adapter_Result : Boolean;
+      Adapter_Result     : Counterweave.Adapter_Results.Adapter_Result)
    is
-      Standard_Output : constant String := To_String (Result.Standard_Output);
+      Standard_Output : constant String := To_String (Process.Standard_Output);
+      Run_Outcome     : constant String :=
+        (if Has_Adapter_Result
+         then Counterweave.Adapter_Results.Image (Adapter_Result.Verdict)
+         else Outcome_Image (Process.Outcome));
       Content         : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.run/1"","
+        & "  ""format"": ""counterweave.run/2"","
         & ASCII.LF
         & "  ""case_sha256"": "
         & Counterweave.Strings.JSON_String
@@ -303,24 +370,24 @@ package body Counterweave.Artifacts is
         & ","
         & ASCII.LF
         & "  ""outcome"": "
-        & Counterweave.Strings.JSON_String (Outcome_Image (Result.Outcome))
+        & Counterweave.Strings.JSON_String (Run_Outcome)
         & ","
         & ASCII.LF
-        & "  ""observations"": "
-        & Observation_JSON (Standard_Output)
-        & ","
-        & ASCII.LF
-        & "  ""stdout"": "
+        & "  ""process"": {""outcome"": "
+        & Counterweave.Strings.JSON_String (Outcome_Image (Process.Outcome))
+        & ", ""stdout"": "
         & Counterweave.Strings.JSON_String (Standard_Output)
-        & ","
-        & ASCII.LF
-        & "  ""stderr"": "
-        & Counterweave.Strings.JSON_String (To_String (Result.Standard_Error))
-        & ","
-        & ASCII.LF
-        & "  ""duration_ms"": "
+        & ", ""stderr"": "
+        & Counterweave.Strings.JSON_String (To_String (Process.Standard_Error))
+        & ", ""duration_ms"": "
         & Counterweave.Strings.Compact_Image
-            (Long_Long_Integer (Result.Elapsed_Milliseconds))
+            (Long_Long_Integer (Process.Elapsed_Milliseconds))
+        & "},"
+        & ASCII.LF
+        & "  ""adapter_result"": "
+        & (if Has_Adapter_Result
+           then Counterweave.Adapter_Results.To_JSON (Adapter_Result)
+           else "null")
         & ASCII.LF
         & "}"
         & ASCII.LF;

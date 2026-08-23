@@ -36,3 +36,7 @@ jobs:
         env:
           COUNTERWEAVE_SOLVER: gecode
         run: examples/ada_stale_handle/run.sh
+      - name: Discover the variable-history idempotency bug
+        env:
+          COUNTERWEAVE_SOLVER: gecode
+        run: examples/ada_idempotent_transfer/run.sh

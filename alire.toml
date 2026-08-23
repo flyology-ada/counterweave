@@ -9,7 +9,12 @@ licenses = "MIT OR Apache-2.0"
 website = "https://github.com/flyology-ada/counterweave"
 tags = ["ada", "testing", "property-test", "minizinc", "constraints"]
 project-files = ["counterweave.gpr"]
-executables = ["counterweave", "counterweave_tests", "stale_handle_adapter"]
+executables = [
+  "counterweave",
+  "counterweave_tests",
+  "stale_handle_adapter",
+  "idempotent_transfer_adapter",
+]
 
 [available.'case(os)']
 'linux|macos' = true

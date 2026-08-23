@@ -3,6 +3,7 @@ with Ada.Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Buggy_Handle_Pool;
+with Counterweave.Adapter_Results;
 with Counterweave.JSON;
 with Counterweave.Strings;
 
@@ -20,8 +21,10 @@ procedure Stale_Handle_Adapter is
       raise Constraint_Error with "usage: stale_handle_adapter --case PATH";
    end Case_Path;
 
-   Source       : constant String := Counterweave.Strings.Read_File (Case_Path);
-   Root         : constant Counterweave.JSON.Value := Counterweave.JSON.Parse (Source);
+   Source       : constant String :=
+     Counterweave.Strings.Read_File (Case_Path);
+   Root         : constant Counterweave.JSON.Value :=
+     Counterweave.JSON.Parse (Source);
    Pack         : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Root, "pack");
    Payload      : constant Counterweave.JSON.Value :=
@@ -42,6 +45,10 @@ procedure Stale_Handle_Adapter is
      To_String
        (Counterweave.JSON.As_String
           (Source, Counterweave.JSON.Member (Source, Pack, "name")));
+   Pack_Version : constant String :=
+     To_String
+       (Counterweave.JSON.As_String
+          (Source, Counterweave.JSON.Member (Source, Pack, "version")));
    Capacity     : constant Buggy_Handle_Pool.Slot_Number :=
      Buggy_Handle_Pool.Slot_Number
        (Counterweave.JSON.As_Integer
@@ -50,7 +57,8 @@ procedure Stale_Handle_Adapter is
      Integer
        (Counterweave.JSON.As_Integer
           (Source, Counterweave.JSON.Member (Source, Parameters, "scenario")));
-   Step_Count   : constant Natural := Counterweave.JSON.Length (Source, Operations);
+   Step_Count   : constant Natural :=
+     Counterweave.JSON.Length (Source, Operations);
 
    type Handle_State is record
       Bound : Boolean := False;
@@ -69,12 +77,10 @@ procedure Stale_Handle_Adapter is
    Observed_Value      : Integer := 0;
 
    function Integer_At
-     (Items : Counterweave.JSON.Value;
-      Index : Natural) return Integer
-   is
-     (Integer
-        (Counterweave.JSON.As_Integer
-           (Source, Counterweave.JSON.Element (Source, Items, Index))));
+     (Items : Counterweave.JSON.Value; Index : Natural) return Integer
+   is (Integer
+         (Counterweave.JSON.As_Integer
+            (Source, Counterweave.JSON.Element (Source, Items, Index))));
 
    procedure Begin_Observation (Index : Natural; Operation : String) is
    begin
@@ -99,14 +105,18 @@ procedure Stale_Handle_Adapter is
    function Operation_Name (Operation : Integer) return String is
    begin
       case Operation is
-         when 1 =>
+         when 1      =>
             return "allocate";
-         when 2 =>
+
+         when 2      =>
             return "write";
-         when 3 =>
+
+         when 3      =>
             return "release";
-         when 4 =>
+
+         when 4      =>
             return "read";
+
          when others =>
             raise Constraint_Error with "unknown generated operation";
       end case;
@@ -137,7 +147,7 @@ begin
          Begin_Observation (Index, Operation_Name (Operation));
          begin
             case Operation is
-               when 1 =>
+               when 1      =>
                   Bound_Handles (Handle_Id) :=
                     (Bound => True,
                      Value => Buggy_Handle_Pool.Allocate (Container));
@@ -151,7 +161,7 @@ begin
                          (Bound_Handles (Handle_Id).Value.Generation)
                      & "}");
 
-               when 2 =>
+               when 2      =>
                   if not Bound_Handles (Handle_Id).Bound then
                      raise Constraint_Error
                        with "write references an unbound handle";
@@ -163,7 +173,7 @@ begin
                      ",""status"":""ok"",""value"":"
                      & Integer'Image (Input_Value));
 
-               when 3 =>
+               when 3      =>
                   if not Bound_Handles (Handle_Id).Bound then
                      raise Constraint_Error
                        with "release references an unbound handle";
@@ -172,7 +182,7 @@ begin
                     (Container, Bound_Handles (Handle_Id).Value);
                   Append (Observations, ",""status"":""ok""");
 
-               when 4 =>
+               when 4      =>
                   if not Bound_Handles (Handle_Id).Bound then
                      raise Constraint_Error
                        with "read references an unbound handle";
@@ -186,6 +196,7 @@ begin
                     (Observations,
                      ",""status"":""ok"",""value"":"
                      & Integer'Image (Observed_Value));
+
                when others =>
                   raise Constraint_Error with "unknown generated operation";
             end case;
@@ -209,33 +220,41 @@ begin
    end loop;
    Append (Observations, "]");
 
-   Ada.Text_IO.Put_Line
-     ("{""property"":""released-handles-stay-stale"","
-      & """steps"":"
-      & To_String (Observations)
-      & ","
-      & """expected_stale"":"
-      & (if Expected_Stale then "true" else "false")
-      & ","
-      & """scenario"":"
-      & Integer'Image (Scenario)
-      & ","
-      & """stale_read_accepted"":"
-      & (if Stale_Read_Accepted then "true" else "false")
-      & ","
-      & """observed_value"":"
-      & Integer'Image (Observed_Value)
-      & ","
-      & """old_generation"":"
-      & Natural'Image (Bound_Handles (1).Value.Generation)
-      & ","
-      & """new_generation"":"
-      & Natural'Image (Bound_Handles (2).Value.Generation)
-      & "}");
-
-   if Failed then
-      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-   end if;
+   declare
+      Observation_Object : constant String :=
+        "{""steps"":"
+        & To_String (Observations)
+        & ",""expected_stale"":"
+        & (if Expected_Stale then "true" else "false")
+        & ",""scenario"":"
+        & Integer'Image (Scenario)
+        & ",""stale_read_accepted"":"
+        & (if Stale_Read_Accepted then "true" else "false")
+        & ",""observed_value"":"
+        & Integer'Image (Observed_Value)
+        & ",""old_generation"":"
+        & Natural'Image (Bound_Handles (1).Value.Generation)
+        & ",""new_generation"":"
+        & Natural'Image (Bound_Handles (2).Value.Generation)
+        & "}";
+      Result             :
+        constant Counterweave.Adapter_Results.Adapter_Result :=
+          (Verdict             =>
+             (if Failed
+              then Counterweave.Adapter_Results.Property_Violation
+              else Counterweave.Adapter_Results.Passed),
+           Pack_Name           => To_Unbounded_String (Pack_Name),
+           Pack_Version        => To_Unbounded_String (Pack_Version),
+           Property_Name       =>
+             To_Unbounded_String ("released-handles-stay-stale"),
+           Failure_Fingerprint =>
+             (if Failed
+              then To_Unbounded_String ("stale-read-accepted")
+              else Null_Unbounded_String),
+           Observations_JSON   => To_Unbounded_String (Observation_Object));
+   begin
+      Ada.Text_IO.Put_Line (Counterweave.Adapter_Results.To_JSON (Result));
+   end;
 exception
    when Error : others =>
       Ada.Text_IO.Put_Line
