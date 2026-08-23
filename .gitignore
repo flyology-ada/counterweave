@@ -1,0 +1,8 @@
+/alire/
+/bin/
+/build/
+/config/
+.agents/
+.claude/rules/
+.claude/skills/
+apm_modules/

@@ -1,0 +1,26 @@
+name = "counterweave"
+description = "Constraint-guided generative testing for whole systems"
+version = "0.1.0-dev"
+
+authors = ["Yurii Rashkovskii"]
+maintainers = ["Yurii Rashkovskii <yrashk@gmail.com>"]
+maintainers-logins = ["yrashk"]
+licenses = "MIT OR Apache-2.0"
+website = "https://github.com/flyology-ada/counterweave"
+tags = ["ada", "testing", "property-test", "minizinc", "constraints"]
+project-files = ["counterweave.gpr"]
+executables = ["counterweave", "counterweave_tests", "stale_handle_adapter"]
+
+[available.'case(os)']
+'linux|macos' = true
+'...' = false
+
+[[depends-on]]
+gnat = ">=13 & <17"
+
+[[actions]]
+type = "test"
+command = ["./bin/counterweave_tests"]
+
+[[depends-on]]
+flyology_tui = "~0.1.1-dev"

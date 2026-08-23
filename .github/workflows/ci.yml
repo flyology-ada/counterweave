@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Alire
+        uses: alire-project/setup-alire@fc4c8ce471aa30b3af0d39ce15add1ee9eaf28f2 # v6.0.0
+        with:
+          version: 2.1.1
+          toolchain: gnat_native=16.1.0 gprbuild=26.0.1
+          cache: true
+      - name: Add Flyology Alire index
+        run: >-
+          alr index --add=git+https://github.com/flyology-ada/alire-index.git
+          --name=flyology
+      - name: Build Ada executables
+        run: alr -n build
+      - name: Run Ada tests
+        run: alr -n test
+      - name: Install MiniZinc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minizinc
+      - name: Discover the example bug
+        env:
+          COUNTERWEAVE_SOLVER: gecode
+        run: examples/ada_stale_handle/run.sh

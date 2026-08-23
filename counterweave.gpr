@@ -1,0 +1,29 @@
+with "flyology_tui";
+
+project Counterweave is
+
+   for Languages use ("Ada");
+   for Source_Dirs use ("src", "tests", "examples/ada_stale_handle/src");
+   for Object_Dir use "build/obj";
+   for Exec_Dir use "bin";
+   for Main use
+     ("counterweave_main.adb", "counterweave_tests.adb", "stale_handle_adapter.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2022", "-gnata", "-gnatVa", "-gnatwa", "-gnatw.X", "-gnatyM110");
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es");
+   end Binder;
+
+   package Builder is
+      for Executable ("counterweave_main.adb") use "counterweave";
+   end Builder;
+
+   package Pretty_Printer is
+      for Charset ("Ada") use "utf-8";
+   end Pretty_Printer;
+
+end Counterweave;
