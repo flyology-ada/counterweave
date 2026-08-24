@@ -1,5 +1,6 @@
 with Counterweave.JSON;
 with Counterweave.Strings;
+with Counterweave.Traces;
 
 package body Counterweave.Adapter_Results is
 
@@ -11,6 +12,9 @@ package body Counterweave.Adapter_Results is
          when Passed             => "pass",
          when Property_Violation => "property-violation",
          when Invalid_Case       => "invalid-case");
+
+   function Has_Trace (Item : Adapter_Result) return Boolean
+   is (Length (Item.Trace_JSON) > 0);
 
    function Parse
      (Source                : String;
@@ -96,10 +100,37 @@ package body Counterweave.Adapter_Results is
       Result.Property_Name := Property_Name;
       Result.Observations_JSON :=
         To_Unbounded_String (Counterweave.JSON.Image (Source, Observations));
+      if Counterweave.JSON.Has_Member (Source, Root, "trace") then
+         declare
+            Trace_Node : constant Counterweave.JSON.Value :=
+              Counterweave.JSON.Member (Source, Root, "trace");
+         begin
+            if Counterweave.JSON.Kind (Trace_Node)
+              = Counterweave.JSON.Object_Value
+            then
+               Result.Trace_JSON :=
+                 To_Unbounded_String
+                   (Counterweave.JSON.Image (Source, Trace_Node));
+               declare
+                  Parsed : constant Counterweave.Traces.Counterexample_Trace :=
+                    Counterweave.Traces.Parse (To_String (Result.Trace_JSON));
+                  pragma Unreferenced (Parsed);
+               begin
+                  null;
+               end;
+            elsif Counterweave.JSON.Kind (Trace_Node)
+              /= Counterweave.JSON.Null_Value
+            then
+               raise Protocol_Error with "adapter trace has invalid type";
+            end if;
+         end;
+      end if;
       return Result;
    exception
       when Counterweave.JSON.JSON_Error =>
          raise Protocol_Error with "malformed adapter result";
+      when Counterweave.Traces.Trace_Error =>
+         raise Protocol_Error with "malformed adapter counterexample trace";
    end Parse;
 
    function To_JSON (Item : Adapter_Result) return String is
@@ -123,6 +154,8 @@ package body Counterweave.Adapter_Results is
         & Fingerprint
         & ",""observations"":"
         & To_String (Item.Observations_JSON)
+        & ",""trace"":"
+        & (if Has_Trace (Item) then To_String (Item.Trace_JSON) else "null")
         & "}";
    end To_JSON;
 

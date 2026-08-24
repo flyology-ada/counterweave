@@ -31,9 +31,14 @@ campaign seed -> indexed trial fork -> generate + execute -> pass -> next fork
 
 - `Counterweave.Choices` owns structurally independent replay streams and the
   recorded choice tape.
+- New generation and search commands select an entropy-derived root seed unless
+  the caller explicitly supplies one. The root seed and derived trial seeds are
+  persisted and displayed separately; campaign replay never draws new entropy.
 - `Counterweave.Adapter_Results` validates the versioned semantic result,
   model-pack handshake, property, and stable failure fingerprint independently
   of process exit status.
+- `Counterweave.Traces` validates the optional, pack-authored
+  `counterweave.trace/1` explanation without using it to classify a verdict.
 - `Counterweave.MiniZinc` asks for one completion under a bounded deadline and
   records the seed actually supplied to supported solvers.
 - `Counterweave.Artifacts` writes versioned JSON cases and runs with SHA-256
@@ -41,6 +46,10 @@ campaign seed -> indexed trial fork -> generate + execute -> pass -> next fork
 - `Counterweave.Campaigns` persists every trial and reconstructs a campaign
   only after checking model, data, and adapter provenance. It verifies semantic
   case identity after replay.
+- Interactive reduction keeps its trace-first completion report in the active
+  Flyology alternate screen until explicit dismissal, then closes the backend
+  once to restore terminal modes and the shell. It does not repaint a second
+  oversized frame after backend teardown.
 - `Counterweave.Choices.Shrink` mutates the recorded fork forest through a
   deterministic strategy portfolio. `Counterweave.Reduction_Engine` replays
   each candidate through MiniZinc and the adapter, accepting it only when the
@@ -58,6 +67,8 @@ campaign seed -> indexed trial fork -> generate + execute -> pass -> next fork
 - `Counterweave.Terminal_Reports` renders the final verdict and replay data
   into the normal terminal with Flyology TUI components; redirected execution
   retains the stable line-oriented report.
+- `Counterweave.Trace_Views` renders model expectations and Ada observations
+  in execution order through Flyology TUI's non-sortable table component.
 - `counterweave_main.adb` is the Ada CLI composition root.
 
 The implementation is one Alire crate and one GPR project. There is no Rust or
@@ -156,15 +167,37 @@ unknown verdicts. Any nonzero adapter exit is an infrastructure error regardless
 of its output. `counterweave.run/2` preserves the process and semantic layers
 separately.
 
+An adapter result may additionally contain `counterweave.trace/1`. The trace
+has a pack-owned summary and model basis followed by execution-ordered steps.
+Every step names its semantic role and action, aligns the model expectation
+with the observed Ada result, classifies the comparison as `match`,
+`divergence`, or `violation`, and cites stable model symbols. The trace is
+diagnostic: Counterweave validates its display contract but does not use it as
+a second verdict or shrink oracle.
+
+The model and observed fields describe state after the named transition. They
+must not merely repeat equivalent call-result words such as `applied once` and
+`applied`. The terminal failure path is a causal projection of the complete
+artifact trace: it begins with one matched transition establishing the relevant
+state before the first mismatch and ends at the first property violation. This
+keeps setup available for replay without presenting an ordinary successful call
+as though it were itself the counterexample.
+
 Process isolation is deliberate: systems under test may crash, hang, leak task
 state, or corrupt their own instance. Persistent workers require an explicit
 and verified reset protocol and are outside the initial implementation.
 
-The stale-handle example keeps the property narrow. MiniZinc emits operation,
-logical-handle, value, and expected-outcome arrays. The adapter interprets all
-steps, records the actual handles and per-step outcomes, and reports whether the
-stale read was accepted. Its semantic result makes the mismatch visible to
-scripts, while the complete trace remains in the `.cwrun` evidence.
+The stale-handle example keeps the property narrow while varying its history.
+MiniZinc emits 9-to-21-step operation, logical-handle, value, and
+expected-outcome arrays. A recorded `history_shape` adds valid live-handle
+traffic before a four-generation lifecycle core. The deliberately faulty Ada
+pool wraps generation 3 to generation 1, so one scenario's old generation-1
+handle aliases the fourth allocation. The adapter interprets all steps, records
+the actual handles and per-step outcomes, and reports whether that stale read
+was accepted. Shrinking `history_shape` to zero regenerates the nine-step core
+through MiniZinc; it does not delete operations behind the model. The semantic
+result remains script-visible while the complete trace stays in `.cwrun`
+evidence.
 
 The independent idempotent-transfer pack uses a variable-length schema. Its
 model generates deposits, first transfers, and valid matching retries while
@@ -184,10 +217,11 @@ simpler ordering within one fork. Cross-fork swaps and flattening are
 deliberately absent because named paths carry semantic identity.
 
 Progress uses a fixed, well-founded tape order: fewer recorded values, then
-fewer forks, then lexicographic fork paths and values. Raw values rank `0..4`
-first, followed by the documented integer boundaries, then ordinary numeric
-order. A boundary such as `u64::MAX` can therefore be a simpler explanatory
-choice without being numerically smaller than the value it replaces.
+fewer forks, then lexicographic fork paths and unsigned numeric values. Small
+and boundary values are tried early, but a value mutation is retained only when
+its raw value decreases. Boundary probes therefore cannot strand reduction at
+`u64::MAX`. Duplicate values receive the same complete integer strategy
+portfolio atomically, including halving, bit operations, and binary search.
 
 Each candidate tape is replayed through the original draw declarations. Replay
 failure makes it an invalid candidate. Successful replay is normalized to the
@@ -198,9 +232,16 @@ choice controlling `step_count`, topology, or another structural dimension to
 shrink without a pack-specific reducer while keeping every generated case
 system-valid. It is not a claim of a globally minimal semantic case.
 
+Reduction evaluates at most 1,000 candidates by default. `--max-attempts`
+changes that ceiling. Reaching the ceiling retains and revalidates the best
+known tape; the report distinguishes `fixed-point` from `attempt-limit`.
+
 `counterweave.reduction/3` records every strategy attempt, before/candidate tape
 hashes, invalid candidates separately from infrastructure errors, the original
-and final tapes, and the final case and run hashes.
+and final tapes, the original and final traces, and the final case and run
+hashes. The live reduction view keeps progress in a dedicated activity section
+and shows the current retained trace; the final report leaves the terminal
+cursor below the rendered evidence.
 
 ## Limits and next steps
 
@@ -213,8 +254,8 @@ The next steps are:
 1. add a pack manifest and source-closure inventory around the implemented
    adapter handshake;
 2. hash complete MiniZinc include closures;
-3. add time-budgeted stopping, corpus promotion, and coverage feedback to
-   bounded campaigns;
+3. add elapsed-time budgets, corpus promotion, and coverage feedback to
+   attempt-bounded campaigns;
 4. add parallel campaigns without changing indexed trial identity;
 5. add pack-owned semantic complexity objectives as an optional second phase
    after generic choice-tape shrinking;

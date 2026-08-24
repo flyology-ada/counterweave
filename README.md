@@ -27,6 +27,12 @@ The case records every consumed 64-bit value, not merely the seed.
 Serialized tapes include the injective fork key and can be decoded into a new
 Ada process for fail-closed replay.
 
+`generate` and `search` choose a fresh root seed when `--seed` is absent. Pass
+`--seed N` only when intentionally repeating an exploration. Example scripts
+follow the same rule and accept `COUNTERWEAVE_SEED=N` as the reproducible
+opt-in. Campaigns and choice tapes retain the selected seed and all consumed
+choices for exact replay.
+
 New tapes use a shrink-friendly bounded codec: raw values are reduced modulo
 the requested range and only the tiny upper rejection tail is discarded. Thus
 shrinking a recorded value toward zero normally shrinks the decoded choice
@@ -49,7 +55,9 @@ The user or library maintainer owns two pack-specific pieces:
 2. An Ada adapter links the exact code under test, validates its pack name and
    version, iterates every materialized step, compares actual returns or
    exceptions with the modeled outcomes, and emits
-   `counterweave.adapter-result/1`.
+   `counterweave.adapter-result/1`. It may attach a `counterweave.trace/1`
+   explanation that aligns each generated action with the model expectation,
+   Ada observation, comparison status, and originating model symbols.
 
 Counterweave owns choice derivation, MiniZinc execution, process isolation,
 classification, artifacts, campaign replay, reduction, and terminal UI. A new
@@ -98,32 +106,47 @@ If CP-SAT is unavailable but MiniZinc has Gecode:
 COUNTERWEAVE_SOLVER=gecode examples/ada_stale_handle/run.sh
 ```
 
-The example searches bounded generational-handle-pool histories. With campaign
-seed 42, it explores 13 passing constraint-valid cases and finds the violation
-on trial 14. The Flyology TUI stays active across the campaign and shows the
-attempt budget, replay seed, progress, and last property result.
+The example searches bounded generational-handle-pool histories from a fresh
+campaign seed, then runs a 256-candidate reduction campaign. The Flyology TUI
+shows native rounded panels and high-color progress for both phases, including
+the campaign seed, derived trial seed, property result, reduction strategy,
+accepted count, and current choice-tape size. Reduction completion remains in
+the full-terminal TUI so the entire causal path and evidence stay visible;
+Enter, Escape, or `q` restores the shell. To repeat the documented campaign
+that finds the violation on trial 14, run:
+
+```sh
+COUNTERWEAVE_SEED=42 examples/ada_stale_handle/run.sh
+```
 
 MiniZinc materializes explicit operation, handle, value, and expected-outcome
-arrays for each valid eight-step history:
+arrays for valid histories between 9 and 21 steps. A recorded `history_shape`
+adds model-valid reads and writes while the first handle is live. The causal
+core is:
 
-1. allocate an old handle;
-2. write its value;
-3. read it while it is live;
-4. release it;
-5. allocate a new handle in the same slot;
-6. write a different value;
-7. read either the current handle or, in one sampled scenario, the released
-   handle;
-8. release the current handle.
+1. allocate `h1` at generation 1 and release it;
+2. allocate and release `h2` at generation 2;
+3. allocate and release `h3` at generation 3;
+4. allocate `h4`, which the model requires to use generation 4;
+5. write the replacement value through `h4`;
+6. read either current `h4` or, in scenario 23, stale `h1`.
 
-The model requires the reused slot's generation to advance, so a stale-probe
-read must be rejected. The deliberately buggy Ada pool forgets that increment.
-The old handle aliases the new allocation and reads its value. The Ada adapter
-iterates the generated arrays, dispatches every operation, and compares each
-return or exception with its modeled outcome. It emits canonical evidence and
-reports a semantic violation; Counterweave records the failure in
-`/tmp/counterweave-stale-handle.cwrun`. Set `COUNTERWEAVE_OUTPUT_DIR` to
-retain the example artifacts elsewhere.
+The deliberately buggy Ada pool represents the effect of an undersized packed
+generation field: after generation 3 it wraps to 1. Most generated histories
+probe `h4` and pass. Scenario 23 probes the much older `h1`, which now aliases
+the replacement and returns its value instead of raising `Stale_Handle`.
+
+The Ada adapter iterates every generated step and compares modeled outcomes
+with actual returns or exceptions. For seed 42, search finds a 13-step failure
+on trial 14. Generic recorded-choice reduction changes `history_shape` from 81
+to 0, regenerating a system-valid 9-step path; it also changes capacity from 4
+to 1 and the replacement value from 139 to 101. The reduction therefore shows
+both input minimization and path shortening while preserving
+`stale-read-accepted`. The bounded example records `attempt-limit` after 256
+candidates because the remaining raw scenario bits still decode to scenario
+23. Counterweave records the final evidence in
+`/tmp/counterweave-stale-handle.cwreduction`. Set
+`COUNTERWEAVE_OUTPUT_DIR` to retain the example artifacts elsewhere.
 
 The important evidence looks like this:
 
@@ -139,7 +162,8 @@ The important evidence looks like this:
       "expected_stale": true,
       "stale_read_accepted": true,
       "old_generation": 1,
-      "new_generation": 1
+      "new_generation": 1,
+      "modeled_new_generation": 4
     }
   }
 }
@@ -178,13 +202,16 @@ bin/counterweave reduce \
   --campaign /tmp/counterweave-idempotent-transfer.cwcampaign \
   --case-output /tmp/transfer-reduced.cwcase \
   --run-output /tmp/transfer-reduced.cwrun \
-  --report-output /tmp/transfer-reduced.cwreduction
+  --report-output /tmp/transfer-reduced.cwreduction \
+  --max-attempts 1000
 ```
 
 For the checked-in seed, reduction changes the generated history from 11 steps
 to 5 and reduces its balance and amount bounds. Counterweave mutates the
 recorded choice tape with structural and value strategies, replays generation,
-and normalizes the candidate to the choices actually consumed. Each candidate
+and normalizes the candidate to the choices actually consumed. Duplicate raw
+values receive the complete integer strategy portfolio together, and boundary
+probes can only move toward a numerically smaller tape. Each candidate
 is completed by MiniZinc, executed again, and retained only if the property and
 fingerprint are unchanged.
 
@@ -201,7 +228,6 @@ bin/counterweave search \
   --draw old_value=10..100 \
   --draw new_value=101..200 \
   --draw scenario=0..31 \
-  --seed 42 \
   --trials 64 \
   --pack ada-stale-handle \
   --intent explore \
@@ -210,6 +236,10 @@ bin/counterweave search \
   --run-output /tmp/stale.cwrun \
   --campaign-output /tmp/stale.cwcampaign
 ```
+
+This command chooses a fresh campaign seed. Add `--seed 42` to repeat that
+specific campaign. The report distinguishes the campaign root seed from the
+derived seed of the failing trial.
 
 Inspect the complete materialized case:
 
@@ -228,8 +258,9 @@ bin/counterweave execute \
 
 The replay command returns a failure status because the retained case exposes
 the bug. The `.cwrun` remains durable evidence. Search derives each trial seed
-from an indexed campaign fork; adding work inside one generated case does not
-shift the seeds of its sibling trials.
+from an indexed campaign fork rooted at the fresh or explicitly supplied
+campaign seed; adding work inside one generated case does not shift the seeds
+of its sibling trials.
 
 Replay the complete campaign into different output paths:
 
@@ -266,7 +297,22 @@ result to standard output:
   "verdict": "property-violation",
   "property": "transfers-are-idempotent",
   "fingerprint": "duplicate-transfer-not-ignored",
-  "observations": {}
+  "observations": {},
+  "trace": {
+    "format": "counterweave.trace/1",
+    "summary": "2 accounts | balance 40 | 5 steps",
+    "basis": "a repeated transaction changes no balance after its first application",
+    "steps": [
+      {
+        "role": "duplicate-transfer-retry",
+        "action": "tx 1: a1->a2, 14",
+        "model": "a1=26, a2=54",
+        "observed": "a1=12, a2=68",
+        "status": "violation",
+        "model_source": "step_is_retry[5], balance_after[5, *]"
+      }
+    ]
+  }
 }
 ```
 
@@ -277,6 +323,17 @@ even if the process printed plausible JSON, so a crash cannot be reported as a
 bug. `counterweave execute` itself returns unsuccessfully for a semantic
 violation so shell scripts can stop, while `counterweave.run/2` preserves the
 successful adapter process outcome separately from the semantic verdict.
+
+The optional trace is an explanatory contract, not a second oracle. Its steps
+must be in execution order and use `match`, `divergence`, or `violation`.
+`model` and `observed` describe the system state after the transition, rather
+than restating that a call returned. Counterweave retains the complete trace in
+the run artifact. The terminal view extracts the causal path: one establishing
+transition before the first mismatch, then every transition through the first
+property violation. Verdict classification and shrink retention still depend
+only on the semantic adapter result and stable property/fingerprint identity.
+This keeps pack-owned model vocabulary out of the generic engine while making
+a TLA+-style failure path available to users.
 
 Counterweave captures standard output and error into the run artifact and keeps
 completed, adapter-error, timeout, cancellation, output-limit, spawn, and
@@ -296,12 +353,13 @@ stays here.
 - `counterweave.case/2` contains the opaque pack parameters and solution,
   complete choice tape, recorded diversity seed, and solver provenance.
 - `counterweave.run/2` separates subprocess outcome from the parsed adapter
-  result and binds both to case and adapter hashes.
+  result, retains an optional `counterweave.trace/1`, and binds both to case and
+  adapter hashes.
 - `counterweave.campaign/3` records the complete search configuration and every
   trial seed, outcome, property, fingerprint, and canonical semantic case hash.
 - `counterweave.reduction/3` records every choice-tape mutation, strategy,
-  outcome, normalized final tape, parameters, case, run, property, and
-  fingerprint.
+  outcome, normalized final tape, parameters, case, run, property,
+  fingerprint, and the original and final explanatory traces.
 
 Exact execution replay needs only a case and adapter. Campaign replay invokes
 the model again and therefore verifies semantic case identity rather than
@@ -313,13 +371,22 @@ requiring the solver-specific flattened bytes to be identical.
 when both standard input and standard output are real terminals and `TERM` is
 usable.
 Search uses Flyology TUI progress, indicator, help, and layout components as a
-persistent campaign dashboard. When search ends, a styled report remains in
-the normal terminal with its verdict, trial count, replay seed, evidence paths,
-and a copyable replay command. Redirected commands, CI, and pipelines retain
-stable plain output. The TUI is only a presentation layer: choices, solver
-inputs, adapter arguments, exit status, and artifacts are identical in either
-mode. Press `q` or Ctrl-C to cancel the active solver or adapter; cancellation
-is recorded separately from a timeout.
+persistent campaign dashboard. Reduction has its own rounded panel with a
+high-color candidate-budget bar, accepted-mutation count, current tape size,
+and last strategy. Shrink activity is kept above the counterexample, while a
+non-sortable Flyology TUI table preserves the causal transition order and
+aligns modeled state with Ada state. Setup calls outside that failure path stay
+in the durable trace instead of crowding the live view. Text markers identify
+matches, the first divergence, and the property violation without relying on
+color: `✓` means the model and Ada state agree after the transition, `≠` marks
+their first difference, and `✕` marks the transition that violates the
+property. Search leaves a bounded styled report in the normal terminal.
+Reduction keeps its trace-first completed view in the full-terminal TUI until
+Enter, Escape, `q`, or Ctrl-C restores the shell. Redirected commands, CI, and
+pipelines retain stable plain output. The TUI is only a
+presentation layer: choices, solver inputs, adapter arguments, exit status,
+and artifacts are identical in either mode. Press `q` or Ctrl-C to cancel the
+active solver or adapter; cancellation is recorded separately from a timeout.
 
 Case provenance records the source model hash, optional base-data hash, recorded
 diversity seed, and a hash of the solver-specific flattened instance. Run

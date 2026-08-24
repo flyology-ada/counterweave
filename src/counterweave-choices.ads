@@ -70,6 +70,8 @@ package Counterweave.Choices is
 
    function Image (Strategy : Shrink_Strategy) return String;
 
+   type Shrink_Stop_Reason is (Fixed_Point, Attempt_Limit, Cancelled);
+
    generic
       with
         procedure Evaluate
@@ -78,7 +80,14 @@ package Counterweave.Choices is
            Strategy  : Shrink_Strategy;
            Location  : String;
            Preserved : out Boolean);
-   procedure Shrink (Initial : Choice_Tape; Result : out Choice_Tape);
+   procedure Shrink
+     (Initial          : Choice_Tape;
+      Result           : out Choice_Tape;
+      Maximum_Attempts : Positive := 1_000;
+      Should_Stop      : access function return Boolean := null;
+      Stopped          : access procedure (Reason : Shrink_Stop_Reason) :=
+        null;
+      Retained         : access procedure := null);
 
    Choice_Error : exception;
    Replay_Error : exception;

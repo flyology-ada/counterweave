@@ -6,6 +6,7 @@ with Buggy_Transfer_Ledger;
 with Counterweave.Adapter_Results;
 with Counterweave.JSON;
 with Counterweave.Strings;
+with Counterweave.Traces;
 
 procedure Idempotent_Transfer_Adapter is
 
@@ -78,7 +79,9 @@ procedure Idempotent_Transfer_Adapter is
      Buggy_Transfer_Ledger.Ledger
        (Account_Count => Account_Count, Transaction_Capacity => Step_Count);
    Observations        : Unbounded_String := To_Unbounded_String ("[");
+   Trace_Steps         : Unbounded_String := To_Unbounded_String ("[");
    First_Observation   : Boolean := True;
+   First_Trace_Step    : Boolean := True;
    Violated            : Boolean := False;
    Failure_Fingerprint : Unbounded_String;
    Duplicate_Steps     : Natural := 0;
@@ -100,6 +103,30 @@ procedure Idempotent_Transfer_Adapter is
           (Counterweave.JSON.As_Integer
              (Source, Counterweave.JSON.Element (Source, Row, Account - 1)));
    end Expected_Balance;
+
+   function Balance_State
+     (Step : Natural; Expected : Boolean) return String
+   is
+      Result : Unbounded_String;
+   begin
+      for Account in 1 .. Account_Count loop
+         if Account > 1 then
+            Append (Result, ", ");
+         end if;
+         Append
+           (Result,
+            "a"
+            & Counterweave.Strings.Compact_Image
+                (Long_Long_Integer (Account))
+            & "="
+            & Counterweave.Strings.Compact_Image
+                (Long_Long_Integer
+                   (if Expected
+                    then Expected_Balance (Step + 1, Account)
+                    else Buggy_Transfer_Ledger.Balance (System, Account))));
+      end loop;
+      return To_String (Result);
+   end Balance_State;
 
    procedure Mark_Violation (Fingerprint : String) is
    begin
@@ -123,6 +150,37 @@ procedure Idempotent_Transfer_Adapter is
          & ",""operation"":"
          & Counterweave.Strings.JSON_String (Operation));
    end Begin_Observation;
+
+   procedure Append_Trace_Step
+     (Role         : String;
+      Action       : String;
+      Model        : String;
+      Observed     : String;
+      Status       : Counterweave.Traces.Step_Status;
+      Model_Source : String) is
+   begin
+      if First_Trace_Step then
+         First_Trace_Step := False;
+      else
+         Append (Trace_Steps, ",");
+      end if;
+      Append
+        (Trace_Steps,
+         "{""role"":"
+         & Counterweave.Strings.JSON_String (Role)
+         & ",""action"":"
+         & Counterweave.Strings.JSON_String (Action)
+         & ",""model"":"
+         & Counterweave.Strings.JSON_String (Model)
+         & ",""observed"":"
+         & Counterweave.Strings.JSON_String (Observed)
+         & ",""status"":"
+         & Counterweave.Strings.JSON_String
+             (Counterweave.Traces.Image (Status))
+         & ",""model_source"":"
+         & Counterweave.Strings.JSON_String (Model_Source)
+         & "}");
+   end Append_Trace_Step;
 
 begin
    if Pack_Name /= "ada-idempotent-transfer" or else Pack_Version /= "1" then
@@ -154,6 +212,8 @@ begin
          Expected_Applied : constant Boolean := Expectation = 1;
          Actual_Applied   : Boolean := False;
          Raised           : Boolean := False;
+         Step_Violated    : Boolean := False;
+         Violation_Before : constant Boolean := Violated;
       begin
          if Expectation not in 0 .. 1 then
             raise Constraint_Error with "unknown generated expectation";
@@ -184,6 +244,7 @@ begin
          end if;
 
          if Raised or else Actual_Applied /= Expected_Applied then
+            Step_Violated := True;
             if not Expected_Applied then
                Mark_Violation ("duplicate-transfer-not-ignored");
             else
@@ -215,6 +276,7 @@ begin
             if Buggy_Transfer_Ledger.Balance (System, Account)
               /= Expected_Balance (Step + 1, Account)
             then
+               Step_Violated := True;
                if not Expected_Applied then
                   Mark_Violation ("duplicate-transfer-not-ignored");
                else
@@ -222,10 +284,56 @@ begin
                end if;
             end if;
          end loop;
+         Append_Trace_Step
+           (Role         =>
+              (if Operation = 1
+               then "deposit"
+               elsif not Expected_Applied
+               then "duplicate-transfer-retry"
+               else "transfer"),
+            Action       =>
+              (if Operation = 1
+               then
+                 "deposit a"
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Target_Account))
+                 & " +"
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Value))
+               else
+                 "tx "
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Transaction))
+                 & ": a"
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Source_Account))
+                 & "->a"
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Target_Account))
+                 & ", "
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Value))),
+            Model        => Balance_State (Step, Expected => True),
+            Observed     => Balance_State (Step, Expected => False),
+            Status       =>
+              (if Step_Violated and then not Violation_Before
+               then Counterweave.Traces.Violated
+               elsif Step_Violated
+               then Counterweave.Traces.Diverged
+               else Counterweave.Traces.Matched),
+            Model_Source =>
+              "step_expectation["
+              & Counterweave.Strings.Compact_Image
+                  (Long_Long_Integer (Step + 1))
+              & "], balance["
+              & Counterweave.Strings.Compact_Image
+                  (Long_Long_Integer (Step + 1))
+              & "]");
          Append (Observations, "}");
       end;
    end loop;
    Append (Observations, "]");
+   Append (Trace_Steps, "]");
 
    declare
       Observation_Object : constant String :=
@@ -235,6 +343,24 @@ begin
         & Natural'Image (Duplicate_Steps)
         & ",""steps"":"
         & To_String (Observations)
+        & "}";
+      Trace_Object       : constant String :=
+        "{""format"":""counterweave.trace/1"",""summary"":"
+        & Counterweave.Strings.JSON_String
+            (Counterweave.Strings.Compact_Image
+               (Long_Long_Integer (Account_Count))
+             & " accounts | balance "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (Initial_Balance))
+             & " | "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (Step_Count))
+             & " steps")
+        & ",""basis"":"
+        & Counterweave.Strings.JSON_String
+            ("a repeated transaction changes no balance after its first application")
+        & ",""steps"":"
+        & To_String (Trace_Steps)
         & "}";
       Result             :
         constant Counterweave.Adapter_Results.Adapter_Result :=
@@ -247,7 +373,8 @@ begin
            Property_Name       =>
              To_Unbounded_String ("transfers-are-idempotent"),
            Failure_Fingerprint => Failure_Fingerprint,
-           Observations_JSON   => To_Unbounded_String (Observation_Object));
+           Observations_JSON   => To_Unbounded_String (Observation_Object),
+           Trace_JSON          => To_Unbounded_String (Trace_Object));
    begin
       Ada.Text_IO.Put_Line (Counterweave.Adapter_Results.To_JSON (Result));
    end;

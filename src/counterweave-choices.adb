@@ -423,7 +423,15 @@ package body Counterweave.Choices is
            when Reorder_Values      => "reorder-values");
    end Image;
 
-   procedure Shrink (Initial : Choice_Tape; Result : out Choice_Tape) is
+   procedure Shrink
+     (Initial          : Choice_Tape;
+      Result           : out Choice_Tape;
+      Maximum_Attempts : Positive := 1_000;
+      Should_Stop      : access function return Boolean := null;
+      Stopped          : access procedure (Reason : Shrink_Stop_Reason) :=
+        null;
+      Retained         : access procedure := null)
+   is
       type Candidate_Value_Array is array (Positive range <>) of Choice_Value;
 
       Small_Values : constant Candidate_Value_Array := [0, 1, 2, 3, 4];
@@ -438,8 +446,12 @@ package body Counterweave.Choices is
          16#0000_0000_0000_00FF#,
          128];
 
-      Current : Choice_Tape := Initial;
-      Pending : Choice_Tape;
+      Current  : Choice_Tape := Initial;
+      Pending  : Choice_Tape;
+      Attempts : Natural := 0;
+
+      Stop_Shrinking : exception;
+      Stop_Reason    : Shrink_Stop_Reason := Fixed_Point;
 
       function Location
         (Fork : Fork_Record; Position : Natural := Natural'Last) return String
@@ -456,38 +468,9 @@ package body Counterweave.Choices is
            & "]";
       end Location;
 
-      function Preferred_Position (Value : Choice_Value) return Natural is
-      begin
-         for Index in Small_Values'Range loop
-            if Small_Values (Index) = Value then
-               return Index - Small_Values'First;
-            end if;
-         end loop;
-         for Index in Boundaries'Range loop
-            if Boundaries (Index) = Value then
-               return Small_Values'Length + Index - Boundaries'First;
-            end if;
-         end loop;
-         return Natural'Last;
-      end Preferred_Position;
-
       function Simpler_Value
         (Candidate : Choice_Value; Original : Choice_Value) return Boolean
-      is
-         Candidate_Position : constant Natural :=
-           Preferred_Position (Candidate);
-         Original_Position  : constant Natural :=
-           Preferred_Position (Original);
-      begin
-         if Candidate_Position /= Natural'Last then
-            return
-              Original_Position = Natural'Last
-              or else Candidate_Position < Original_Position;
-         elsif Original_Position /= Natural'Last then
-            return False;
-         end if;
-         return Candidate < Original;
-      end Simpler_Value;
+      is (Candidate < Original);
 
       function Strictly_Smaller
         (Candidate : Choice_Tape; Original : Choice_Tape) return Boolean
@@ -540,6 +523,14 @@ package body Counterweave.Choices is
          if not Strictly_Smaller (Candidate, Current) then
             return;
          end if;
+         if Should_Stop /= null and then Should_Stop.all then
+            Stop_Reason := Cancelled;
+            raise Stop_Shrinking;
+         elsif Attempts = Maximum_Attempts then
+            Stop_Reason := Attempt_Limit;
+            raise Stop_Shrinking;
+         end if;
+         Attempts := Attempts + 1;
          Evaluate (Current, Candidate, Strategy, Where, Preserved);
          if Preserved and then Strictly_Smaller (Candidate, Current) then
             Pending.Root_Seed := Candidate.Root_Seed;
@@ -547,6 +538,9 @@ package body Counterweave.Choices is
             Fork_Vectors.Move
               (Target => Pending.Forks, Source => Candidate.Forks);
             Accepted := True;
+            if Retained /= null then
+               Retained.all;
+            end if;
          end if;
       end Attempt;
 
@@ -857,6 +851,43 @@ package body Counterweave.Choices is
       end Try_Redistribute_Bit;
 
       function Try_Minimize_Duplicates return Boolean is
+
+         function Try_Replacement
+           (Original    : Choice_Value;
+            Replacement : Choice_Value;
+            Fork_Index  : Natural;
+            Value_Index : Natural) return Boolean
+         is
+            Candidate : Choice_Tape := Current;
+            Accepted  : Boolean;
+         begin
+            if not Simpler_Value (Replacement, Original) then
+               return False;
+            end if;
+            for Index in
+              Candidate.Forks.First_Index .. Candidate.Forks.Last_Index
+            loop
+               declare
+                  Item : Fork_Record := Candidate.Forks (Index);
+               begin
+                  for Position in
+                    Item.Values.First_Index .. Item.Values.Last_Index
+                  loop
+                     if Item.Values (Position) = Original then
+                        Item.Values.Replace_Element (Position, Replacement);
+                     end if;
+                  end loop;
+                  Candidate.Forks.Replace_Element (Index, Item);
+               end;
+            end loop;
+            Attempt
+              (Candidate,
+               Minimize_Duplicates,
+               Location (Current.Forks (Fork_Index), Value_Index),
+               Accepted);
+            return Accepted;
+         end Try_Replacement;
+
       begin
          for Fork_Index in
            Current.Forks.First_Index .. Current.Forks.Last_Index
@@ -885,45 +916,80 @@ package body Counterweave.Choices is
                   end loop;
                   if Count > 1 then
                      for Replacement of Small_Values loop
-                        if Simpler_Value (Replacement, Original) then
+                        if Try_Replacement
+                             (Original, Replacement, Fork_Index, Value_Index)
+                        then
+                           return True;
+                        end if;
+                     end loop;
+                     for Replacement of Boundaries loop
+                        if Try_Replacement
+                             (Original, Replacement, Fork_Index, Value_Index)
+                        then
+                           return True;
+                        end if;
+                     end loop;
+                     if Try_Replacement
+                          (Original, Original / 2, Fork_Index, Value_Index)
+                     then
+                        return True;
+                     end if;
+                     for Bit in reverse 0 .. 63 loop
+                        declare
+                           Mask : constant Choice_Value :=
+                             Interfaces.Shift_Left (1, Bit);
+                        begin
+                           if (Original and Mask) /= 0
+                             and then Try_Replacement
+                                        (Original,
+                                         Original and not Mask,
+                                         Fork_Index,
+                                         Value_Index)
+                           then
+                              return True;
+                           end if;
+                        end;
+                     end loop;
+                     for High in reverse 1 .. 63 loop
+                        for Low in 0 .. High - 1 loop
                            declare
-                              Candidate : Choice_Tape := Current;
-                              Accepted  : Boolean;
+                              High_Mask : constant Choice_Value :=
+                                Interfaces.Shift_Left (1, High);
+                              Low_Mask  : constant Choice_Value :=
+                                Interfaces.Shift_Left (1, Low);
                            begin
-                              for Index in
-                                Candidate.Forks.First_Index
-                                .. Candidate.Forks.Last_Index
-                              loop
-                                 declare
-                                    Item : Fork_Record :=
-                                      Candidate.Forks (Index);
-                                 begin
-                                    for Position in
-                                      Item.Values.First_Index
-                                      .. Item.Values.Last_Index
-                                    loop
-                                       if Item.Values (Position) = Original
-                                       then
-                                          Item.Values.Replace_Element
-                                            (Position, Replacement);
-                                       end if;
-                                    end loop;
-                                    Candidate.Forks.Replace_Element
-                                      (Index, Item);
-                                 end;
-                              end loop;
-                              Attempt
-                                (Candidate,
-                                 Minimize_Duplicates,
-                                 Location
-                                   (Current.Forks (Fork_Index), Value_Index),
-                                 Accepted);
-                              if Accepted then
+                              if (Original and High_Mask) /= 0
+                                and then (Original and Low_Mask) = 0
+                                and then Try_Replacement
+                                           (Original,
+                                            (Original and not High_Mask)
+                                            or Low_Mask,
+                                            Fork_Index,
+                                            Value_Index)
+                              then
                                  return True;
                               end if;
                            end;
-                        end if;
+                        end loop;
                      end loop;
+                     declare
+                        Low  : Choice_Value := 0;
+                        High : constant Choice_Value := Original;
+                     begin
+                        while Low < High loop
+                           declare
+                              Middle : constant Choice_Value :=
+                                Low + (High - Low) / 2;
+                           begin
+                              if Try_Replacement
+                                   (Original, Middle, Fork_Index, Value_Index)
+                              then
+                                 return True;
+                              end if;
+                              Low := Middle + 1;
+                           end;
+                        end loop;
+                     end;
                   end if;
                end;
             end loop;
@@ -1111,6 +1177,17 @@ package body Counterweave.Choices is
       Result.Root_Seed := Current.Root_Seed;
       Result.Bounded := Current.Bounded;
       Fork_Vectors.Move (Target => Result.Forks, Source => Current.Forks);
+      if Stopped /= null then
+         Stopped (Fixed_Point);
+      end if;
+   exception
+      when Stop_Shrinking =>
+         Result.Root_Seed := Current.Root_Seed;
+         Result.Bounded := Current.Bounded;
+         Fork_Vectors.Move (Target => Result.Forks, Source => Current.Forks);
+         if Stopped /= null then
+            Stopped (Stop_Reason);
+         end if;
    end Shrink;
 
 end Counterweave.Choices;

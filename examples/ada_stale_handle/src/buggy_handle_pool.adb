@@ -22,8 +22,15 @@ package body Buggy_Handle_Pool is
             Container.Slots (Slot).Active := True;
             if Container.Slots (Slot).Generation = 0 then
                Container.Slots (Slot).Generation := 1;
+            elsif Container.Slots (Slot).Generation = 3 then
+               --  Intentional example bug: a packed generation field wraps
+               --  after three live identities and makes generation 1 current
+               --  again while handles from its first use can still exist.
+               Container.Slots (Slot).Generation := 1;
+            else
+               Container.Slots (Slot).Generation :=
+                 Container.Slots (Slot).Generation + 1;
             end if;
-            --  Intentional example bug: reuse must increment Generation here.
             return
               (Slot => Slot, Generation => Container.Slots (Slot).Generation);
          end if;

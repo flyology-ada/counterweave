@@ -11,6 +11,7 @@ package Counterweave.Adapter_Results is
       Property_Name       : Ada.Strings.Unbounded.Unbounded_String;
       Failure_Fingerprint : Ada.Strings.Unbounded.Unbounded_String;
       Observations_JSON   : Ada.Strings.Unbounded.Unbounded_String;
+      Trace_JSON          : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    function Parse
@@ -19,6 +20,8 @@ package Counterweave.Adapter_Results is
       Expected_Pack_Version : String) return Adapter_Result;
 
    function To_JSON (Item : Adapter_Result) return String;
+
+   function Has_Trace (Item : Adapter_Result) return Boolean;
 
    function Image (Verdict : Verdict_Kind) return String;
 

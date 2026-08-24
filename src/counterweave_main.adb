@@ -16,6 +16,7 @@ with Counterweave.Hashes;
 with Counterweave.JSON;
 with Counterweave.MiniZinc;
 with Counterweave.Processes;
+with Counterweave.Reduction_UI;
 with Counterweave.Reducers;
 with Counterweave.Strings;
 with Counterweave.Terminal_UI;
@@ -168,7 +169,7 @@ procedure Counterweave_Main is
          & "--case-output CASE --run-output RUN --campaign-output CAMPAIGN");
       Ada.Text_IO.Put_Line
         ("counterweave reduce --campaign CAMPAIGN --case-output CASE "
-         & "--run-output RUN --report-output REPORT");
+         & "--run-output RUN --report-output REPORT [--max-attempts N]");
       Ada.Text_IO.Put_Line ("counterweave inspect CASE");
    end Usage;
 
@@ -999,6 +1000,7 @@ procedure Counterweave_Main is
            Counterweave.Campaign_UI.Runs
              (Title            => "Exploring system-valid Ada histories",
               Maximum_Attempts => Maximum_Trials,
+              Root_Seed        => Seed_Value,
               Attempt          => Attempt);
 
          Final_Result : Counterweave.Campaign_UI.Attempt_Result;
@@ -1025,6 +1027,11 @@ procedure Counterweave_Main is
             Run_Output        => To_String (Run_Output));
          Counterweave.Campaigns.Write
            (To_String (Campaign_Output), Campaign_Log);
+         if not Counterweave.Campaign_UI.Interactive then
+            Ada.Text_IO.Put_Line
+              ("campaign seed="
+               & Counterweave.Strings.Compact_Image (Seed_Value));
+         end if;
          Campaign.Run (Final_Result, Attempts);
          Counterweave.Campaigns.Set_Status
            (Campaign_Log,
@@ -1041,10 +1048,10 @@ procedure Counterweave_Main is
               (Result           => Final_Result,
                Attempts         => Attempts,
                Maximum_Attempts => Maximum_Trials,
+               Root_Seed        => Seed_Value,
                Campaign_Path    => To_String (Campaign_Output),
                Case_Path        => To_String (Case_Output),
-               Run_Path         => To_String (Run_Output),
-               Adapter          => To_String (Adapter));
+               Run_Path         => To_String (Run_Output));
          end if;
          case Final_Result.Outcome is
             when Counterweave.Campaign_UI.Found     =>
@@ -1063,6 +1070,10 @@ procedure Counterweave_Main is
                   Ada.Text_IO.Put_Line
                     ("fingerprint: "
                      & To_String (Final_Result.Failure_Fingerprint));
+                  Ada.Text_IO.Put_Line
+                    ("failing trial seed: "
+                     & Counterweave.Strings.Compact_Image
+                         (Final_Result.Seed));
                   Ada.Text_IO.Put_Line
                     ("replay: "
                      & Ada.Command_Line.Command_Name
@@ -1220,11 +1231,12 @@ procedure Counterweave_Main is
    end Replay_Campaign;
 
    procedure Reduce_Campaign is
-      Campaign_Path : Unbounded_String;
-      Case_Output   : Unbounded_String;
-      Run_Output    : Unbounded_String;
-      Report_Output : Unbounded_String;
-      Position      : Positive := 2;
+      Campaign_Path    : Unbounded_String;
+      Case_Output      : Unbounded_String;
+      Run_Output       : Unbounded_String;
+      Report_Output    : Unbounded_String;
+      Maximum_Attempts : Positive := 1_000;
+      Position         : Positive := 2;
    begin
       while Position <= Ada.Command_Line.Argument_Count loop
          declare
@@ -1242,6 +1254,12 @@ procedure Counterweave_Main is
             elsif Argument = "--report-output" then
                Report_Output :=
                  To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--max-attempts" then
+               declare
+                  Text : constant String := Value_After (Position, Argument);
+               begin
+                  Maximum_Attempts := Positive'Value (Text);
+               end;
             else
                raise Constraint_Error
                  with "unknown reduce option: " & Argument;
@@ -1259,14 +1277,45 @@ procedure Counterweave_Main is
              "reduce requires --campaign, --case-output, --run-output, "
              & "and --report-output";
       end if;
-      Counterweave.Reducers.Reduce
-        (Campaign_Path => To_String (Campaign_Path),
-         Executable    => Ada.Command_Line.Command_Name,
-         Case_Output   => To_String (Case_Output),
-         Run_Output    => To_String (Run_Output),
-         Report_Output => To_String (Report_Output));
-      Status_Line ("reduced counterexample: " & To_String (Case_Output));
-      Status_Line ("reduction report: " & To_String (Report_Output));
+      declare
+         procedure Action
+           (Progress :
+              access procedure
+                (Update : Counterweave.Reducers.Reduction_Update);
+            Stop     : access function return Boolean) is
+         begin
+            Counterweave.Reducers.Reduce
+              (Campaign_Path    => To_String (Campaign_Path),
+               Executable       => Ada.Command_Line.Command_Name,
+               Case_Output      => To_String (Case_Output),
+               Run_Output       => To_String (Run_Output),
+               Report_Output    => To_String (Report_Output),
+               Maximum_Attempts => Maximum_Attempts,
+               Progress         => Progress,
+               Stop             => Stop);
+         end Action;
+
+         Final : Counterweave.Reduction_UI.Completion_Result;
+      begin
+         Counterweave.Reduction_UI.Run
+           (Title            => "Shrinking a system-valid counterexample",
+            Case_Path        => To_String (Case_Output),
+            Run_Path         => To_String (Run_Output),
+            Report_Path      => To_String (Report_Output),
+            Maximum_Attempts => Maximum_Attempts,
+            Action           => Action'Access,
+            Result           => Final);
+         if not Counterweave.Reduction_UI.Interactive then
+            Ada.Text_IO.Put_Line
+              ("reduced counterexample after "
+               & Counterweave.Strings.Compact_Image
+                   (Long_Long_Integer (Final.Last.Attempt))
+               & " candidate attempts");
+            Ada.Text_IO.Put_Line ("case:      " & To_String (Case_Output));
+            Ada.Text_IO.Put_Line ("run:       " & To_String (Run_Output));
+            Ada.Text_IO.Put_Line ("reduction: " & To_String (Report_Output));
+         end if;
+      end;
    end Reduce_Campaign;
 
 begin
@@ -1300,16 +1349,7 @@ begin
    elsif Ada.Command_Line.Argument (1) = "replay-campaign" then
       Replay_Campaign;
    elsif Ada.Command_Line.Argument (1) = "reduce" then
-      declare
-         package UI is new
-           Counterweave.Terminal_UI
-             (Title  => "Shrinking a system-valid counterexample",
-              Action => Reduce_Campaign);
-      begin
-         Interactive_Status := UI.Interactive;
-         UI.Run;
-         Flush_Status;
-      end;
+      Reduce_Campaign;
    elsif Ada.Command_Line.Argument (1) = "inspect" then
       if Ada.Command_Line.Argument_Count /= 2 then
          raise Constraint_Error with "inspect requires one case path";

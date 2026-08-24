@@ -19,6 +19,7 @@ package Counterweave.Campaign_UI is
    generic
       Title : String;
       Maximum_Attempts : Positive;
+      Root_Seed : Interfaces.Unsigned_64;
       with procedure Attempt (Index : Positive; Result : out Attempt_Result);
    package Runs is
 

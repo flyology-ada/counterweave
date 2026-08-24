@@ -147,7 +147,7 @@ package body Counterweave.Campaign_UI is
          Available_Width : constant Natural :=
            (if Item.Width > 8 then Item.Width - 8 else Item.Width);
          Content_Width   : constant Positive :=
-           Positive (Natural'Max (40, Natural'Min (72, Available_Width)));
+           Positive (Natural'Max (40, Available_Width));
          Bar_Width       : constant Positive := Content_Width;
          Ratio           : constant Long_Float :=
            Long_Float (Item.Current) / Long_Float (Maximum_Attempts);
@@ -218,9 +218,15 @@ package body Counterweave.Campaign_UI is
               Wide (Image (Item.Current) & " / " & Image (Maximum_Attempts)),
               Content_Width,
               Theme);
-         Seed_Row    : constant Flyology_TUI.Surfaces.Surface :=
+         Campaign_Seed_Row : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Indicators.Key_Value
-             ("last replay seed",
+             ("campaign seed",
+              Wide (Counterweave.Strings.Compact_Image (Root_Seed)),
+              Content_Width,
+              Theme);
+         Trial_Seed_Row : constant Flyology_TUI.Surfaces.Surface :=
+           Flyology_TUI.Components.Indicators.Key_Value
+             ("current trial seed",
               Wide
                 (if Item.Current = 0
                  then "pending"
@@ -239,8 +245,11 @@ package body Counterweave.Campaign_UI is
               Theme);
          Metrics     : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Layouts.Join_Vertically
-             (Trial_Row,
-              Flyology_TUI.Layouts.Join_Vertically (Seed_Row, Result_Row));
+             (Campaign_Seed_Row,
+              Flyology_TUI.Layouts.Join_Vertically
+                (Trial_Row,
+                 Flyology_TUI.Layouts.Join_Vertically
+                   (Trial_Seed_Row, Result_Row)));
          Help        : constant Flyology_TUI.Surfaces.Surface :=
            Flyology_TUI.Components.Help.Render
              ([(Key         => Wide_Text.To_Unbounded_Wide_Wide_String ("q"),

@@ -12,14 +12,17 @@ with Counterweave.Hashes;
 with Counterweave.JSON;
 with Counterweave.Processes;
 with Counterweave.Strings;
+with Counterweave.Traces;
 with GNAT.OS_Lib;
 
 procedure Counterweave_Tests is
 
    use type Counterweave.Choices.Choice_Value;
    use type Counterweave.Choices.Shrink_Strategy;
+   use type Counterweave.Choices.Shrink_Stop_Reason;
    use type Counterweave.Adapter_Results.Verdict_Kind;
    use type Counterweave.Processes.Outcome_Kind;
+   use type Counterweave.Traces.Step_Status;
 
    Failures : Natural := 0;
 
@@ -404,8 +407,8 @@ procedure Counterweave_Tests is
               & """algorithm"":""splitmix64-v1"","
               & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
               & """forks"":[{""path"":""a[0]"",""key"":""1:a#0;"","
-              & """values"":[""100""]},{""path"":""b[0]"","
-              & """key"":""1:b#0;"",""values"":[""100""]}]}");
+              & """values"":[""1000""]},{""path"":""b[0]"","
+              & """key"":""1:b#0;"",""values"":[""1000""]}]}");
          Result  : Counterweave.Choices.Choice_Tape;
          Saw     : Boolean := False;
 
@@ -425,7 +428,7 @@ procedure Counterweave_Tests is
             Left := Counterweave.Choices.Draw (Session, Path_A);
             Right := Counterweave.Choices.Draw (Session, Path_B);
             Candidate := Counterweave.Choices.Consumed (Session);
-            Preserved := Left = Right;
+            Preserved := Left = Right and then Left >= 500;
             Saw :=
               Saw or else Strategy = Counterweave.Choices.Minimize_Duplicates;
          exception
@@ -437,9 +440,17 @@ procedure Counterweave_Tests is
            Counterweave.Choices.Shrink (Evaluate => Evaluate);
       begin
          Minimize (Initial, Result);
-         Check
-           (Saw,
-            "choice shrinking minimizes related duplicate values together");
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw
+               and then Counterweave.Choices.Draw (Session, Path_A) = 500
+               and then Counterweave.Choices.Draw (Session, Path_B) = 500,
+               "choice shrinking applies integer strategies to duplicates");
+            Counterweave.Choices.Finish (Session);
+         end;
       end;
 
       declare
@@ -452,7 +463,7 @@ procedure Counterweave_Tests is
               & """algorithm"":""splitmix64-v1"","
               & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
               & """forks"":[{""path"":""boundary[0]"","
-              & """key"":""8:boundary#0;"",""values"":[""100""]}]}");
+              & """key"":""8:boundary#0;"",""values"":[""2000""]}]}");
          Result  : Counterweave.Choices.Choice_Tape;
          Saw     : Boolean := False;
 
@@ -470,9 +481,7 @@ procedure Counterweave_Tests is
          begin
             Value := Counterweave.Choices.Draw (Session, Path);
             Candidate := Counterweave.Choices.Consumed (Session);
-            Preserved :=
-              Value = 100
-              or else Value = Counterweave.Choices.Choice_Value'Last;
+            Preserved := Value >= 1_000;
             Saw := Saw or else Strategy = Counterweave.Choices.Boundary_Value;
          exception
             when Counterweave.Choices.Replay_Error =>
@@ -488,10 +497,74 @@ procedure Counterweave_Tests is
               Counterweave.Choices.Replay (Result);
          begin
             Check
-              (Saw
-               and then Counterweave.Choices.Draw (Session, Path)
-                        = Counterweave.Choices.Choice_Value'Last,
-               "choice shrinking preserves interesting boundary failures");
+              (Saw and then Counterweave.Choices.Draw (Session, Path) = 1_000,
+               "boundary probes do not trap numeric shrinking at u64 max");
+            Counterweave.Choices.Finish (Session);
+         end;
+      end;
+
+      declare
+         Path           : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "budget", 0);
+         Initial        : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""budget[0]"","
+              & """key"":""6:budget#0;"",""values"":[""100""]}]}");
+         Result         : Counterweave.Choices.Choice_Tape;
+         Reason         : Counterweave.Choices.Shrink_Stop_Reason :=
+           Counterweave.Choices.Fixed_Point;
+         Calls          : Natural := 0;
+         Retained_Count : Natural := 0;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Strategy, Location);
+         begin
+            Calls := Calls + 1;
+            Candidate := Current;
+            Preserved := True;
+         end Evaluate;
+
+         procedure On_Stop (Value : Counterweave.Choices.Shrink_Stop_Reason) is
+         begin
+            Reason := Value;
+         end On_Stop;
+
+         procedure On_Retained is
+         begin
+            Retained_Count := Retained_Count + 1;
+         end On_Retained;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize
+           (Initial,
+            Result,
+            Maximum_Attempts => 1,
+            Stopped          => On_Stop'Access,
+            Retained         => On_Retained'Access);
+         Check
+           (Calls = 1
+            and then Reason = Counterweave.Choices.Attempt_Limit
+            and then Retained_Count = 0
+            and then Counterweave.Choices.Value_Count (Result) = 1,
+            "choice shrinking budgets evaluations but counts only retained changes");
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Counterweave.Choices.Draw (Session, Path) = 100,
+               "attempt-budget exhaustion retains the best tape");
             Counterweave.Choices.Finish (Session);
          end;
       end;
@@ -981,7 +1054,15 @@ procedure Counterweave_Tests is
         & """verdict"":""property-violation"","
         & """property"":""transfers-are-idempotent"","
         & """fingerprint"":""duplicate-credit"","
-        & """observations"":{""credited_twice"":true}}";
+        & """observations"":{""credited_twice"":true},"
+        & """trace"":{""format"":""counterweave.trace/1"","
+        & """summary"":""2 accounts | 3 steps"","
+        & """basis"":""duplicate transactions are ignored"","
+        & """steps"":[{""role"":""duplicate-retry"","
+        & """action"":""transfer tx 1"","
+        & """model"":""a1=26, a2=54"",""observed"":""a1=12, a2=68"","  --  State after transition.
+        & """status"":""violation"","
+        & """model_source"":""step_expectation[3]""}]}}";
       Parsed         : constant Counterweave.Adapter_Results.Adapter_Result :=
         Counterweave.Adapter_Results.Parse (Violation_JSON, "ledger", "1");
    begin
@@ -992,6 +1073,20 @@ procedure Counterweave_Tests is
         (Ada.Strings.Unbounded.To_String (Parsed.Failure_Fingerprint)
          = "duplicate-credit",
          "preserve stable failure fingerprint");
+      Check
+        (Counterweave.Adapter_Results.Has_Trace (Parsed),
+         "parse optional generator-neutral counterexample trace");
+      declare
+         Trace : constant Counterweave.Traces.Counterexample_Trace :=
+           Counterweave.Traces.Parse
+             (Ada.Strings.Unbounded.To_String (Parsed.Trace_JSON));
+      begin
+         Check
+           (Natural (Trace.Steps.Length) = 1
+            and then Trace.Steps.First_Element.Status
+                     = Counterweave.Traces.Violated,
+            "validate aligned model and observed trace steps");
+      end;
       declare
          Round_Trip : constant Counterweave.Adapter_Results.Adapter_Result :=
            Counterweave.Adapter_Results.Parse
@@ -1047,6 +1142,34 @@ procedure Counterweave_Tests is
                Raised := True;
          end;
          Check (Raised, "reject property violation without a fingerprint");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Ignored :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     ("{""format"":""counterweave.adapter-result/1"","
+                      & """pack"":{""name"":""ledger"",""version"":""1""},"
+                      & """verdict"":""pass"",""property"":""ledger-valid"","
+                      & """fingerprint"":null,""observations"":{},"
+                      & """trace"":{""format"":""counterweave.trace/1"","
+                      & """summary"":""invalid"",""basis"":""model"","
+                      & """steps"":[]}}",
+                      "ledger",
+                      "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject a malformed optional counterexample trace");
       end;
    end Test_Adapter_Results;
 

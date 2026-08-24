@@ -6,10 +6,12 @@ with Buggy_Handle_Pool;
 with Counterweave.Adapter_Results;
 with Counterweave.JSON;
 with Counterweave.Strings;
+with Counterweave.Traces;
 
 procedure Stale_Handle_Adapter is
 
    use Ada.Strings.Unbounded;
+   use type Counterweave.Traces.Step_Status;
 
    function Case_Path return String is
    begin
@@ -21,56 +23,91 @@ procedure Stale_Handle_Adapter is
       raise Constraint_Error with "usage: stale_handle_adapter --case PATH";
    end Case_Path;
 
-   Source       : constant String :=
+   Source         : constant String :=
      Counterweave.Strings.Read_File (Case_Path);
-   Root         : constant Counterweave.JSON.Value :=
+   Root           : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Parse (Source);
-   Pack         : constant Counterweave.JSON.Value :=
+   Pack           : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Root, "pack");
-   Payload      : constant Counterweave.JSON.Value :=
+   Payload        : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Root, "payload");
-   Parameters   : constant Counterweave.JSON.Value :=
+   Parameters     : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Payload, "parameters");
-   Solution     : constant Counterweave.JSON.Value :=
+   Solution       : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Payload, "solution");
-   Operations   : constant Counterweave.JSON.Value :=
+   Operations     : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Solution, "step_operation");
-   Handles      : constant Counterweave.JSON.Value :=
+   Handles        : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Solution, "step_handle");
-   Values       : constant Counterweave.JSON.Value :=
+   Values         : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Solution, "step_value");
-   Expectations : constant Counterweave.JSON.Value :=
+   Expectations   : constant Counterweave.JSON.Value :=
      Counterweave.JSON.Member (Source, Solution, "step_expectation");
-   Pack_Name    : constant String :=
+   Pack_Name      : constant String :=
      To_String
        (Counterweave.JSON.As_String
           (Source, Counterweave.JSON.Member (Source, Pack, "name")));
-   Pack_Version : constant String :=
+   Pack_Version   : constant String :=
      To_String
        (Counterweave.JSON.As_String
           (Source, Counterweave.JSON.Member (Source, Pack, "version")));
-   Capacity     : constant Buggy_Handle_Pool.Slot_Number :=
+   Capacity       : constant Buggy_Handle_Pool.Slot_Number :=
      Buggy_Handle_Pool.Slot_Number
        (Counterweave.JSON.As_Integer
           (Source, Counterweave.JSON.Member (Source, Parameters, "capacity")));
-   Scenario     : constant Integer :=
+   Old_Value      : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source,
+           Counterweave.JSON.Member (Source, Parameters, "old_value")));
+   New_Value      : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source,
+           Counterweave.JSON.Member (Source, Parameters, "new_value")));
+   History_Shape  : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source,
+           Counterweave.JSON.Member (Source, Parameters, "history_shape")));
+   Scenario       : constant Integer :=
      Integer
        (Counterweave.JSON.As_Integer
           (Source, Counterweave.JSON.Member (Source, Parameters, "scenario")));
-   Step_Count   : constant Natural :=
+   Step_Count     : constant Natural :=
      Counterweave.JSON.Length (Source, Operations);
+   Old_Slot       : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source, Counterweave.JSON.Member (Source, Solution, "old_slot")));
+   New_Slot       : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source, Counterweave.JSON.Member (Source, Solution, "new_slot")));
+   Old_Generation : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source,
+           Counterweave.JSON.Member (Source, Solution, "old_generation")));
+   New_Generation : constant Integer :=
+     Integer
+       (Counterweave.JSON.As_Integer
+          (Source,
+           Counterweave.JSON.Member (Source, Solution, "new_generation")));
 
    type Handle_State is record
       Bound : Boolean := False;
       Value : Buggy_Handle_Pool.Handle;
    end record;
 
-   type Handle_Table is array (Positive range 1 .. 2) of Handle_State;
+   type Handle_Table is array (Positive range 1 .. 4) of Handle_State;
 
    Container           : Buggy_Handle_Pool.Pool (Capacity);
    Bound_Handles       : Handle_Table;
    Observations        : Unbounded_String := To_Unbounded_String ("[");
+   Trace_Steps         : Unbounded_String := To_Unbounded_String ("[");
    First_Observation   : Boolean := True;
+   First_Trace_Step    : Boolean := True;
    Failed              : Boolean := False;
    Expected_Stale      : Boolean := False;
    Stale_Read_Accepted : Boolean := False;
@@ -101,6 +138,77 @@ procedure Stale_Handle_Adapter is
    begin
       Append (Observations, "}");
    end Finish_Observation;
+
+   procedure Append_Trace_Step
+     (Role         : String;
+      Action       : String;
+      Model        : String;
+      Observed     : String;
+      Status       : Counterweave.Traces.Step_Status;
+      Model_Source : String) is
+   begin
+      if First_Trace_Step then
+         First_Trace_Step := False;
+      else
+         Append (Trace_Steps, ",");
+      end if;
+      Append
+        (Trace_Steps,
+         "{""role"":"
+         & Counterweave.Strings.JSON_String (Role)
+         & ",""action"":"
+         & Counterweave.Strings.JSON_String (Action)
+         & ",""model"":"
+         & Counterweave.Strings.JSON_String (Model)
+         & ",""observed"":"
+         & Counterweave.Strings.JSON_String (Observed)
+         & ",""status"":"
+         & Counterweave.Strings.JSON_String
+             (Counterweave.Traces.Image (Status))
+         & ",""model_source"":"
+         & Counterweave.Strings.JSON_String (Model_Source)
+         & "}");
+   end Append_Trace_Step;
+
+   function Role_Name
+     (Operation, Handle_Id, Expectation : Integer) return String
+   is (if Expectation = 1
+       then "stale-probe"
+       elsif Operation = 1
+       then
+         (case Handle_Id is
+            when 1      => "allocate-original",
+            when 2 | 3  => "allocate-intermediate",
+            when 4      => "allocate-replacement",
+            when others => "allocate-generated")
+       elsif Operation = 3
+       then "release-generation"
+       elsif Operation = 2 and then Handle_Id = 4
+       then "write-replacement"
+       elsif Operation = 2
+       then "live-write"
+       else "live-probe");
+
+   function Model_Source_Name
+     (Index, Operation, Handle_Id, Expectation : Integer) return String
+   is (if Expectation = 1
+       then
+         "expected_stale, step_expectation["
+         & Counterweave.Strings.Compact_Image (Long_Long_Integer (Index + 1))
+         & "]"
+       elsif Operation = 1 and then Handle_Id = 1
+       then "generation[1], old_generation"
+       elsif Operation = 1 and then Handle_Id = 4
+       then
+         "generation["
+         & Counterweave.Strings.Compact_Image (Long_Long_Integer (Index + 1))
+         & "], new_generation"
+       else
+         "step_operation["
+         & Counterweave.Strings.Compact_Image (Long_Long_Integer (Index + 1))
+         & "], step_expectation["
+         & Counterweave.Strings.Compact_Image (Long_Long_Integer (Index + 1))
+         & "]");
 
    function Operation_Name (Operation : Integer) return String is
    begin
@@ -137,15 +245,98 @@ begin
    for Index in 0 .. Step_Count loop
       exit when Index = Step_Count;
       declare
-         Operation   : constant Integer := Integer_At (Operations, Index);
-         Handle_Id   : constant Positive := Integer_At (Handles, Index);
-         Input_Value : constant Integer := Integer_At (Values, Index);
-         Expectation : constant Integer := Integer_At (Expectations, Index);
+         Operation    : constant Integer := Integer_At (Operations, Index);
+         Handle_Id    : constant Positive := Integer_At (Handles, Index);
+         Input_Value  : constant Integer := Integer_At (Values, Index);
+         Expectation  : constant Integer := Integer_At (Expectations, Index);
+         Action       : Unbounded_String;
+         Model_Result : Unbounded_String;
+         Actual       : Unbounded_String;
+         Trace_Status : Counterweave.Traces.Step_Status :=
+           Counterweave.Traces.Matched;
       begin
          if Expectation not in 0 .. 2 then
             raise Constraint_Error with "unknown generated expectation";
          end if;
          Begin_Observation (Index, Operation_Name (Operation));
+         case Operation is
+            when 1      =>
+               Action :=
+                 To_Unbounded_String
+                   ("allocate h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id)));
+               Model_Result :=
+                 To_Unbounded_String
+                   ("h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id))
+                    & ": slot "
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer
+                           (if Handle_Id = 1 then Old_Slot else New_Slot))
+                    & ", gen "
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer
+                           (if Handle_Id = 1
+                            then Old_Generation
+                            elsif Handle_Id = 4
+                            then New_Generation
+                            else Handle_Id)));
+
+            when 2      =>
+               Action :=
+                 To_Unbounded_String
+                   ("write h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id))
+                    & " = "
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Input_Value)));
+               Model_Result :=
+                 To_Unbounded_String
+                   ("slot 1 contains "
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Input_Value)));
+
+            when 3      =>
+               Action :=
+                 To_Unbounded_String
+                   ("release h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id)));
+               Model_Result :=
+                 To_Unbounded_String
+                   ("h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id))
+                    & " becomes stale");
+
+            when 4      =>
+               Action :=
+                 To_Unbounded_String
+                   ("read h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id)));
+               Model_Result :=
+                 To_Unbounded_String
+                   (if Expectation = 1
+                    then
+                      "stale h"
+                      & Counterweave.Strings.Compact_Image
+                          (Long_Long_Integer (Handle_Id))
+                      & " rejected"
+                    else
+                      "returned "
+                      & Counterweave.Strings.Compact_Image
+                          (Long_Long_Integer
+                             (if Handle_Id = 4
+                              then New_Value
+                              else Old_Value)));
+
+            when others =>
+               null;
+         end case;
          begin
             case Operation is
                when 1      =>
@@ -161,6 +352,22 @@ begin
                      & Natural'Image
                          (Bound_Handles (Handle_Id).Value.Generation)
                      & "}");
+                  Actual :=
+                    To_Unbounded_String
+                      ("h"
+                       & Counterweave.Strings.Compact_Image
+                           (Long_Long_Integer (Handle_Id))
+                       & ": slot "
+                       & Counterweave.Strings.Compact_Image
+                           (Long_Long_Integer
+                              (Bound_Handles (Handle_Id).Value.Slot))
+                       & ", gen "
+                       & Counterweave.Strings.Compact_Image
+                           (Long_Long_Integer
+                              (Bound_Handles (Handle_Id).Value.Generation)));
+                  if Actual /= Model_Result then
+                     Trace_Status := Counterweave.Traces.Diverged;
+                  end if;
 
                when 2      =>
                   if not Bound_Handles (Handle_Id).Bound then
@@ -173,6 +380,7 @@ begin
                     (Observations,
                      ",""status"":""ok"",""value"":"
                      & Integer'Image (Input_Value));
+                  Actual := Model_Result;
 
                when 3      =>
                   if not Bound_Handles (Handle_Id).Bound then
@@ -182,6 +390,7 @@ begin
                   Buggy_Handle_Pool.Release
                     (Container, Bound_Handles (Handle_Id).Value);
                   Append (Observations, ",""status"":""ok""");
+                  Actual := Model_Result;
 
                when 4      =>
                   if not Bound_Handles (Handle_Id).Bound then
@@ -197,29 +406,67 @@ begin
                     (Observations,
                      ",""status"":""ok"",""value"":"
                      & Integer'Image (Observed_Value));
+                  Actual :=
+                    To_Unbounded_String
+                      ((if Expectation = 1
+                        then
+                          "stale h"
+                          & Counterweave.Strings.Compact_Image
+                              (Long_Long_Integer (Handle_Id))
+                          & " returned "
+                        else "returned ")
+                       & Counterweave.Strings.Compact_Image
+                           (Long_Long_Integer (Observed_Value)));
+                  if Expectation /= 0 then
+                     Trace_Status := Counterweave.Traces.Violated;
+                  end if;
 
                when others =>
                   raise Constraint_Error with "unknown generated operation";
             end case;
+            if Trace_Status = Counterweave.Traces.Matched
+              and then Actual /= Model_Result
+            then
+               Trace_Status := Counterweave.Traces.Diverged;
+            end if;
             if Expectation /= 0 then
                Failed := True;
             end if;
          exception
             when Buggy_Handle_Pool.Stale_Handle =>
                Append (Observations, ",""status"":""stale""");
+               Actual :=
+                 To_Unbounded_String
+                   ("stale h"
+                    & Counterweave.Strings.Compact_Image
+                        (Long_Long_Integer (Handle_Id))
+                    & " rejected");
                if Expectation /= 1 then
                   Failed := True;
+                  Trace_Status := Counterweave.Traces.Violated;
                end if;
             when Buggy_Handle_Pool.Pool_Exhausted =>
                Append (Observations, ",""status"":""pool-exhausted""");
+               Actual := To_Unbounded_String ("pool exhausted");
                if Expectation /= 2 then
                   Failed := True;
+                  Trace_Status := Counterweave.Traces.Violated;
                end if;
          end;
+         Append_Trace_Step
+           (Role         => Role_Name (Operation, Handle_Id, Expectation),
+            Action       => To_String (Action),
+            Model        => To_String (Model_Result),
+            Observed     => To_String (Actual),
+            Status       => Trace_Status,
+            Model_Source =>
+              Model_Source_Name
+                (Index, Operation, Handle_Id, Expectation));
          Finish_Observation;
       end;
    end loop;
    Append (Observations, "]");
+   Append (Trace_Steps, "]");
 
    declare
       Observation_Object : constant String :=
@@ -229,6 +476,8 @@ begin
         & (if Expected_Stale then "true" else "false")
         & ",""scenario"":"
         & Integer'Image (Scenario)
+        & ",""history_shape"":"
+        & Integer'Image (History_Shape)
         & ",""stale_read_accepted"":"
         & (if Stale_Read_Accepted then "true" else "false")
         & ",""observed_value"":"
@@ -236,7 +485,31 @@ begin
         & ",""old_generation"":"
         & Natural'Image (Bound_Handles (1).Value.Generation)
         & ",""new_generation"":"
-        & Natural'Image (Bound_Handles (2).Value.Generation)
+        & Natural'Image (Bound_Handles (4).Value.Generation)
+        & ",""modeled_new_generation"":"
+        & Integer'Image (New_Generation)
+        & "}";
+      Trace_Object       : constant String :=
+        "{""format"":""counterweave.trace/1"",""summary"":"
+        & Counterweave.Strings.JSON_String
+            ("capacity "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (Capacity))
+             & " | old "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (Old_Value))
+             & " | new "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (New_Value))
+             & " | "
+             & Counterweave.Strings.Compact_Image
+                 (Long_Long_Integer (Step_Count))
+             & " steps")
+        & ",""basis"":"
+        & Counterweave.Strings.JSON_String
+            ("every allocation advances generation; released h1 stays stale")
+        & ",""steps"":"
+        & To_String (Trace_Steps)
         & "}";
       Result             :
         constant Counterweave.Adapter_Results.Adapter_Result :=
@@ -252,7 +525,8 @@ begin
              (if Failed
               then To_Unbounded_String ("stale-read-accepted")
               else Null_Unbounded_String),
-           Observations_JSON   => To_Unbounded_String (Observation_Object));
+           Observations_JSON   => To_Unbounded_String (Observation_Object),
+           Trace_JSON          => To_Unbounded_String (Trace_Object));
    begin
       Ada.Text_IO.Put_Line (Counterweave.Adapter_Results.To_JSON (Result));
    end;

@@ -11,6 +11,7 @@ with Counterweave.Hashes;
 with Counterweave.JSON;
 with Counterweave.Processes;
 with Counterweave.Strings;
+with Counterweave.Traces;
 with GNAT.OS_Lib;
 with Interfaces;
 
@@ -18,6 +19,7 @@ package body Counterweave.Reduction_Engine is
 
    use Ada.Strings.Unbounded;
    use type Counterweave.Adapter_Results.Verdict_Kind;
+   use type Counterweave.Choices.Shrink_Stop_Reason;
    use type Counterweave.JSON.Value_Kind;
    use type Counterweave.Processes.Outcome_Kind;
    use type Interfaces.Unsigned_64;
@@ -31,11 +33,15 @@ package body Counterweave.Reduction_Engine is
    end record;
 
    procedure Reduce
-     (Campaign_Path : String;
-      Executable    : String;
-      Case_Output   : String;
-      Run_Output    : String;
-      Report_Output : String)
+     (Campaign_Path    : String;
+      Executable       : String;
+      Case_Output      : String;
+      Run_Output       : String;
+      Report_Output    : String;
+      Maximum_Attempts : Positive;
+      Progress         :
+        access procedure (Update : Counterweave.Reducers.Reduction_Update);
+      Stop             : access function return Boolean)
    is
       Campaign_Source        : constant String :=
         Counterweave.Strings.Read_File (Campaign_Path);
@@ -113,6 +119,12 @@ package body Counterweave.Reduction_Engine is
       Retained_Payload     : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Root, "payload");
+      Retained_Provenance  : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member
+          (Retained_Case_Source, Retained_Root, "provenance");
+      Retained_Model       : constant Counterweave.JSON.Value :=
+        Counterweave.JSON.Member
+          (Retained_Case_Source, Retained_Provenance, "model");
       Original_Parameters  : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Payload, "parameters");
@@ -128,10 +140,66 @@ package body Counterweave.Reduction_Engine is
       Attempts_JSON        : Unbounded_String := To_Unbounded_String ("[");
       First_Attempt        : Boolean := True;
       Reduction_Attempts   : Natural := 0;
+      Accepted_Attempts    : Natural := 0;
+      Last_Update          : Counterweave.Reducers.Reduction_Update;
+      Original_Repro       : Unbounded_String;
+      Original_Trace       : Unbounded_String;
+      Best_Repro           : Unbounded_String;
+      Best_Trace           : Unbounded_String;
+      Last_Evaluated_Repro : Unbounded_String;
+      Last_Evaluated_Trace : Unbounded_String;
+      Last_Candidate_Repro : Unbounded_String;
+      Last_Candidate_Trace : Unbounded_String;
+      Final_Trace          : Unbounded_String;
+      Stop_Reason          : Counterweave.Choices.Shrink_Stop_Reason :=
+        Counterweave.Choices.Fixed_Point;
+
+      function Trace_Summary
+        (Source : Unbounded_String) return Unbounded_String is
+      begin
+         if Length (Source) = 0 then
+            return Null_Unbounded_String;
+         end if;
+         return Counterweave.Traces.Parse (To_String (Source)).Summary;
+      end Trace_Summary;
+
+      function Short_Hash (Value : String) return String
+      is (if Value'Length <= 12
+          then Value
+          else Value (Value'First .. Value'First + 11));
+
+      Model_Backend : constant String :=
+        To_String
+          (Counterweave.JSON.As_String
+             (Retained_Case_Source,
+              Counterweave.JSON.Member
+                (Retained_Case_Source, Retained_Model, "backend")));
+      Model_SHA256  : constant String :=
+        To_String
+          (Counterweave.JSON.As_String
+             (Retained_Case_Source,
+              Counterweave.JSON.Member
+                (Retained_Case_Source, Retained_Model, "model_sha256")));
+      Pack_Label    : constant Unbounded_String :=
+        To_Unbounded_String (Pack & "/" & Pack_Version);
+      Model_Label   : constant Unbounded_String :=
+        To_Unbounded_String
+          (Model_Backend
+           & " "
+           & Solver
+           & " | model "
+           & Short_Hash (Model_SHA256));
 
       function Choice_Hash
         (Tape : Counterweave.Choices.Choice_Tape) return String
       is (Counterweave.Hashes.SHA256 (Counterweave.Choices.To_JSON (Tape)));
+
+      function Stop_Image
+        (Reason : Counterweave.Choices.Shrink_Stop_Reason) return String
+      is (case Reason is
+            when Counterweave.Choices.Fixed_Point   => "fixed-point",
+            when Counterweave.Choices.Attempt_Limit => "attempt-limit",
+            when Counterweave.Choices.Cancelled     => "cancelled");
 
       function Current_Case_Replay_Hash return String is
       begin
@@ -208,11 +276,60 @@ package body Counterweave.Reduction_Engine is
             & "}");
       end Record_Attempt;
 
+      procedure Publish
+        (Current   : Counterweave.Choices.Choice_Tape;
+         Candidate : Counterweave.Choices.Choice_Tape;
+         Strategy  : Counterweave.Choices.Shrink_Strategy;
+         Location  : String;
+         Result    : Evaluation)
+      is
+         Update : constant Counterweave.Reducers.Reduction_Update :=
+           (Attempt             => Reduction_Attempts,
+            Maximum_Attempts    => Maximum_Attempts,
+            Accepted            => Accepted_Attempts,
+            Current_Forks       => Counterweave.Choices.Fork_Count (Current),
+            Current_Values      => Counterweave.Choices.Value_Count (Current),
+            Candidate_Forks     => Counterweave.Choices.Fork_Count (Candidate),
+            Candidate_Values    =>
+              Counterweave.Choices.Value_Count (Candidate),
+            Outcome             =>
+              (case Result.Outcome is
+                 when Preserved            => Counterweave.Reducers.Preserved,
+                 when Different_Result     =>
+                   Counterweave.Reducers.Different_Result,
+                 when Invalid_Candidate    =>
+                   Counterweave.Reducers.Invalid_Candidate,
+                 when Infrastructure_Error =>
+                   Counterweave.Reducers.Infrastructure_Error),
+            Strategy            =>
+              To_Unbounded_String (Counterweave.Choices.Image (Strategy)),
+            Location            => To_Unbounded_String (Location),
+            Detail              => Result.Detail,
+            Pack_Label          => Pack_Label,
+            Model_Label         => Model_Label,
+            Property_Name       => Failure_Property,
+            Failure_Fingerprint => Failure_Fingerprint,
+            Original_Repro      => Original_Repro,
+            Current_Repro       => Best_Repro,
+            Original_Trace_JSON => Original_Trace,
+            Current_Trace_JSON  => Best_Trace,
+            Retained            => False);
+      begin
+         Last_Candidate_Repro := Last_Evaluated_Repro;
+         Last_Candidate_Trace := Last_Evaluated_Trace;
+         Last_Update := Update;
+         if Progress /= null then
+            Progress (Update);
+         end if;
+      end Publish;
+
       function Evaluate
         (Candidate : in out Counterweave.Choices.Choice_Tape) return Evaluation
       is
          Generate_Arguments : Counterweave.Strings.String_Vector;
       begin
+         Last_Evaluated_Repro := Null_Unbounded_String;
+         Last_Evaluated_Trace := Null_Unbounded_String;
          if Ada.Directories.Exists (Case_Output) then
             Ada.Directories.Delete_File (Case_Output);
          end if;
@@ -354,6 +471,10 @@ package body Counterweave.Reduction_Engine is
                       Pack,
                       Pack_Version);
             begin
+               if Counterweave.Adapter_Results.Has_Trace (Protocol) then
+                  Last_Evaluated_Trace := Protocol.Trace_JSON;
+                  Last_Evaluated_Repro := Trace_Summary (Last_Evaluated_Trace);
+               end if;
                if Protocol.Verdict
                  = Counterweave.Adapter_Results.Property_Violation
                  and then Protocol.Property_Name = Failure_Property
@@ -403,7 +524,29 @@ package body Counterweave.Reduction_Engine is
       begin
          Is_Preserved := Result.Outcome = Preserved;
          Record_Attempt (Current, Candidate, Strategy, Location, Result);
+         Publish (Current, Candidate, Strategy, Location, Result);
       end Evaluate_Candidate;
+
+      procedure On_Retained is
+      begin
+         Accepted_Attempts := Accepted_Attempts + 1;
+         Best_Repro := Last_Candidate_Repro;
+         Best_Trace := Last_Candidate_Trace;
+         Last_Update.Accepted := Accepted_Attempts;
+         Last_Update.Current_Forks := Last_Update.Candidate_Forks;
+         Last_Update.Current_Values := Last_Update.Candidate_Values;
+         Last_Update.Current_Repro := Best_Repro;
+         Last_Update.Current_Trace_JSON := Best_Trace;
+         Last_Update.Retained := True;
+         if Progress /= null then
+            Progress (Last_Update);
+         end if;
+      end On_Retained;
+
+      procedure On_Stop (Reason : Counterweave.Choices.Shrink_Stop_Reason) is
+      begin
+         Stop_Reason := Reason;
+      end On_Stop;
 
       procedure Minimize is new
         Counterweave.Choices.Shrink (Evaluate => Evaluate_Candidate);
@@ -547,20 +690,62 @@ package body Counterweave.Reduction_Engine is
          Baseline      : constant Evaluation := Evaluate (Baseline_Tape);
       begin
          if Baseline.Outcome /= Preserved then
-            raise Reduction_Error
-              with "retained failure does not reproduce before reduction";
+            if Stop /= null and then Stop.all then
+               raise Reduction_Error with "reduction cancelled";
+            else
+               raise Reduction_Error
+                 with "retained failure does not reproduce before reduction";
+            end if;
+         end if;
+         Original_Repro := Last_Evaluated_Repro;
+         Original_Trace := Last_Evaluated_Trace;
+         Best_Repro := Original_Repro;
+         Best_Trace := Original_Trace;
+         Last_Update.Maximum_Attempts := Maximum_Attempts;
+         Last_Update.Current_Forks :=
+           Counterweave.Choices.Fork_Count (Original_Tape);
+         Last_Update.Current_Values :=
+           Counterweave.Choices.Value_Count (Original_Tape);
+         Last_Update.Candidate_Forks := Last_Update.Current_Forks;
+         Last_Update.Candidate_Values := Last_Update.Current_Values;
+         Last_Update.Outcome := Counterweave.Reducers.Preserved;
+         Last_Update.Pack_Label := Pack_Label;
+         Last_Update.Model_Label := Model_Label;
+         Last_Update.Property_Name := Failure_Property;
+         Last_Update.Failure_Fingerprint := Failure_Fingerprint;
+         Last_Update.Original_Repro := Original_Repro;
+         Last_Update.Current_Repro := Best_Repro;
+         Last_Update.Original_Trace_JSON := Original_Trace;
+         Last_Update.Current_Trace_JSON := Best_Trace;
+         if Progress /= null then
+            Progress (Last_Update);
          end if;
       end;
 
-      Minimize (Original_Tape, Reduced_Tape);
+      Minimize
+        (Original_Tape,
+         Reduced_Tape,
+         Maximum_Attempts => Maximum_Attempts,
+         Should_Stop      => Stop,
+         Stopped          => On_Stop'Access,
+         Retained         => On_Retained'Access);
+
+      if Stop_Reason = Counterweave.Choices.Cancelled then
+         raise Reduction_Error with "reduction cancelled";
+      end if;
 
       declare
          Final_Result : constant Evaluation := Evaluate (Reduced_Tape);
       begin
          if Final_Result.Outcome /= Preserved then
-            raise Reduction_Error
-              with "final reduced tape lost the failure fingerprint";
+            if Stop /= null and then Stop.all then
+               raise Reduction_Error with "reduction cancelled";
+            else
+               raise Reduction_Error
+                 with "final reduced tape lost the failure fingerprint";
+            end if;
          end if;
+         Final_Trace := Last_Evaluated_Trace;
       end;
       Append (Attempts_JSON, "]");
       Counterweave.Strings.Write_File_Atomically
@@ -587,6 +772,12 @@ package body Counterweave.Reduction_Engine is
              (Retained_Case_Source, Original_Parameters)
          & ","
          & ASCII.LF
+         & "  ""original_trace"": "
+         & (if Length (Original_Trace) = 0
+            then "null"
+            else To_String (Original_Trace))
+         & ","
+         & ASCII.LF
          & "  ""original_case_replay_sha256"": "
          & Counterweave.Strings.JSON_String (To_String (Failure_Case_Hash))
          & ","
@@ -604,12 +795,32 @@ package body Counterweave.Reduction_Engine is
              (Long_Long_Integer (Reduction_Attempts))
          & ","
          & ASCII.LF
+         & "  ""maximum_attempts"": "
+         & Counterweave.Strings.Compact_Image
+             (Long_Long_Integer (Maximum_Attempts))
+         & ","
+         & ASCII.LF
+         & "  ""accepted_attempt_count"": "
+         & Counterweave.Strings.Compact_Image
+             (Long_Long_Integer (Accepted_Attempts))
+         & ","
+         & ASCII.LF
+         & "  ""stop_reason"": "
+         & Counterweave.Strings.JSON_String (Stop_Image (Stop_Reason))
+         & ","
+         & ASCII.LF
          & "  ""attempts"": "
          & To_String (Attempts_JSON)
          & ","
          & ASCII.LF
          & "  ""final_parameters"": "
          & Current_Parameters
+         & ","
+         & ASCII.LF
+         & "  ""final_trace"": "
+         & (if Length (Final_Trace) = 0
+            then "null"
+            else To_String (Final_Trace))
          & ","
          & ASCII.LF
          & "  ""final_choices_sha256"": "
