@@ -156,7 +156,7 @@ procedure Counterweave_Main is
    begin
       Ada.Text_IO.Put_Line
         ("counterweave generate --model MODEL --draw NAME=MIN..MAX ... "
-         & "--pack PACK --output CASE");
+         & "--pack PACK --output CASE [--choice-tape TAPE]");
       Ada.Text_IO.Put_Line
         ("counterweave execute --case CASE --adapter PROGRAM "
          & "--output RUN [--adapter-arg ARG]");
@@ -173,19 +173,20 @@ procedure Counterweave_Main is
    end Usage;
 
    procedure Generate is
-      Model_Path     : Unbounded_String;
-      Base_Data_Path : Unbounded_String;
-      Solver         : Unbounded_String := To_Unbounded_String ("cp-sat");
-      Pack           : Unbounded_String;
-      Pack_Version   : Unbounded_String := To_Unbounded_String ("1");
-      Intent         : Unbounded_String := To_Unbounded_String ("satisfy");
-      Target         : Unbounded_String := To_Unbounded_String ("default");
-      Output_Path    : Unbounded_String;
-      Seed_Value     : Interfaces.Unsigned_64 := 0;
-      Seed_Was_Set   : Boolean := False;
-      Solver_Timeout : Positive := 30_000;
-      Draws          : Draw_Vectors.Vector;
-      Position       : Positive := 2;
+      Model_Path       : Unbounded_String;
+      Base_Data_Path   : Unbounded_String;
+      Choice_Tape_Path : Unbounded_String;
+      Solver           : Unbounded_String := To_Unbounded_String ("cp-sat");
+      Pack             : Unbounded_String;
+      Pack_Version     : Unbounded_String := To_Unbounded_String ("1");
+      Intent           : Unbounded_String := To_Unbounded_String ("satisfy");
+      Target           : Unbounded_String := To_Unbounded_String ("default");
+      Output_Path      : Unbounded_String;
+      Seed_Value       : Interfaces.Unsigned_64 := 0;
+      Seed_Was_Set     : Boolean := False;
+      Solver_Timeout   : Positive := 30_000;
+      Draws            : Draw_Vectors.Vector;
+      Position         : Positive := 2;
    begin
       while Position <= Ada.Command_Line.Argument_Count loop
          declare
@@ -196,6 +197,9 @@ procedure Counterweave_Main is
                  To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--data" then
                Base_Data_Path :=
+                 To_Unbounded_String (Value_After (Position, Argument));
+            elsif Argument = "--choice-tape" then
+               Choice_Tape_Path :=
                  To_Unbounded_String (Value_After (Position, Argument));
             elsif Argument = "--solver" then
                Solver :=
@@ -269,24 +273,62 @@ procedure Counterweave_Main is
          if Length (Base_Data_Path) > 0 then
             Inputs.Append (To_String (Base_Data_Path));
          end if;
+         if Length (Choice_Tape_Path) > 0 then
+            Inputs.Append (To_String (Choice_Tape_Path));
+         end if;
          Outputs.Append (To_String (Output_Path));
          Counterweave.Strings.Validate_Output_Paths
            (Inputs, Outputs, "generate");
       end;
-      if not Seed_Was_Set then
+      if Length (Choice_Tape_Path) > 0 and then Seed_Was_Set then
+         raise Constraint_Error
+           with "generate accepts either --seed or --choice-tape, not both";
+      elsif not Seed_Was_Set and then Length (Choice_Tape_Path) = 0 then
          Seed_Value := Entropy_Seed;
       end if;
 
       declare
          Tape            : Counterweave.Choices.Choice_Tape;
+         Session         : Counterweave.Choices.Replay_Session;
+         Replaying       : constant Boolean := Length (Choice_Tape_Path) > 0;
          Data_Path       : constant String := Temporary_Data_Path;
          Data_Content    : Unbounded_String;
          Parameters_JSON : Unbounded_String := To_Unbounded_String ("{");
          First           : Boolean := True;
          Raw_Seed        : Interfaces.Unsigned_64;
          Diversity_Seed  : Interfaces.Unsigned_64;
+
+         function Draw
+           (Path : Counterweave.Choices.Fork_Path)
+            return Interfaces.Unsigned_64 is
+         begin
+            if Replaying then
+               return Counterweave.Choices.Draw (Session, Path);
+            end if;
+            return Counterweave.Choices.Draw (Tape, Path);
+         end Draw;
+
+         function Draw_Bounded
+           (Path    : Counterweave.Choices.Fork_Path;
+            Maximum : Interfaces.Unsigned_64) return Interfaces.Unsigned_64 is
+         begin
+            if Replaying then
+               return
+                 Counterweave.Choices.Draw_Bounded (Session, Path, Maximum);
+            end if;
+            return Counterweave.Choices.Draw_Bounded (Tape, Path, Maximum);
+         end Draw_Bounded;
       begin
-         Counterweave.Choices.Start_Recording (Tape, Seed_Value);
+         if Replaying then
+            Tape :=
+              Counterweave.Choices.From_JSON
+                (Counterweave.Strings.Read_File
+                   (To_String (Choice_Tape_Path)));
+            Seed_Value := Counterweave.Choices.Seed (Tape);
+            Session := Counterweave.Choices.Replay (Tape);
+         else
+            Counterweave.Choices.Start_Recording (Tape, Seed_Value);
+         end if;
          if Length (Base_Data_Path) > 0 then
             Append
               (Data_Content,
@@ -305,7 +347,7 @@ procedure Counterweave_Main is
                     To_String (Draw.Name),
                     0);
                Offset : constant Interfaces.Unsigned_64 :=
-                 Counterweave.Choices.Draw_Bounded (Tape, Path, Width);
+                 Draw_Bounded (Path, Width);
                Value  : constant Long_Long_Integer :=
                  Add_Offset (Draw.Minimum, Offset);
                Image  : constant String :=
@@ -332,9 +374,12 @@ procedure Counterweave_Main is
               Counterweave.Choices.Child
                 (Counterweave.Choices.Root, "completion", 0);
          begin
-            Raw_Seed := Counterweave.Choices.Draw (Tape, Seed_Path);
+            Raw_Seed := Draw (Seed_Path);
             Diversity_Seed := Raw_Seed mod 2**31;
          end;
+         if Replaying then
+            Tape := Counterweave.Choices.Consumed (Session);
+         end if;
          Append
            (Data_Content,
             "counterweave_diversity_seed = "

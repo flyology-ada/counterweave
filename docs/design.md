@@ -41,9 +41,10 @@ campaign seed -> indexed trial fork -> generate + execute -> pass -> next fork
 - `Counterweave.Campaigns` persists every trial and reconstructs a campaign
   only after checking model, data, and adapter provenance. It verifies semantic
   case identity after replay.
-- `Counterweave.Reducers` fixes sampled parameters, asks MiniZinc for a fresh
-  valid completion, executes it, and accepts the candidate only when the same
-  property and fingerprint remain.
+- `Counterweave.Choices.Shrink` mutates the recorded fork forest through a
+  deterministic strategy portfolio. `Counterweave.Reduction_Engine` replays
+  each candidate through MiniZinc and the adapter, accepting it only when the
+  same property and fingerprint remain.
 - `Counterweave.Processes` isolates solvers and adapters, captures bounded
   output, enforces deadlines, and terminates the child process tree where the
   GNAT runtime supports it.
@@ -74,6 +75,11 @@ path, injective encoded fork key, and each consumed raw 64-bit value. It can be
 decoded in a later process. Replay reads those values rather than re-running
 the PRNG. It fails on unsupported formats or algorithms, duplicate forks,
 missing or exhausted values, or unused values at completion.
+
+`counterweave.choices/2` also records `upper-rejection-v1`, the bounded-choice
+codec. It preserves uniform modulo sampling while making zero and other small
+raw values valid shrink targets. `counterweave.choices/1` remains decodable
+with its original lower-tail rejection behavior.
 
 ## Generation
 
@@ -119,12 +125,12 @@ recorded provenance before running, and then compares those semantic fields for
 every attempt. The flattened solver artifact remains diagnostic: MiniZinc can
 emit byte-different FlatZinc for an equivalent materialized case.
 
-`counterweave.campaign/2` defines semantic case identity through canonical JSON:
+`counterweave.campaign/3` defines semantic case identity through canonical JSON:
 object members are sorted, strings are decoded and re-encoded consistently,
 whitespace is removed, and exact decimal values are normalized without
 floating-point conversion. This keeps equivalent pack payloads identical while
 retaining array order and every semantically distinct value. Reduction reports
-using that identity are `counterweave.reduction/2`; earlier artifact versions
+using that identity are `counterweave.reduction/3`; earlier artifact versions
 are rejected rather than interpreted with the new hash definition.
 
 The campaign UI is incremental rather than a long opaque action. A Flyology
@@ -170,18 +176,31 @@ reapplied.
 
 ## Reduction
 
-Reduction starts from a retained campaign violation and its materialized case.
-For each sampled integer parameter it tries values toward the closest value to
-zero in the original range. Every candidate fixes all sampled parameters,
-reuses the failing trial seed, invokes MiniZinc again, and executes the resulting
-case. A candidate is retained only when both property and failure fingerprint
-match. The deterministic halving pass is repeated while it makes progress.
+Reduction starts from the exact choice tape in a retained failing case. The
+generic shrinker repeatedly tries fork-subtree and fork deletion, chunk
+deletion, small and boundary values, halving, bit clearing and redistribution,
+binary search, duplicate co-shrinking, lowering with dependent deletion, and
+simpler ordering within one fork. Cross-fork swaps and flattening are
+deliberately absent because named paths carry semantic identity.
 
-This is constraint-preserving parameter reduction, not a claim of globally
-minimal steps. A pack exposes structural dimensions such as `step_count` as
-draws when it wants the generic reducer to shorten them. The reduction artifact
-records accepted and rejected candidates and binds the final case and run by
-hash.
+Progress uses a fixed, well-founded tape order: fewer recorded values, then
+fewer forks, then lexicographic fork paths and values. Raw values rank `0..4`
+first, followed by the documented integer boundaries, then ordinary numeric
+order. A boundary such as `u64::MAX` can therefore be a simpler explanatory
+choice without being numerically smaller than the value it replaces.
+
+Each candidate tape is replayed through the original draw declarations. Replay
+failure makes it an invalid candidate. Successful replay is normalized to the
+forks and values actually consumed, completed through MiniZinc, and executed by
+the Ada adapter. A mutation is retained only when it is strictly smaller and
+the original property plus failure fingerprint remain. This allows a random
+choice controlling `step_count`, topology, or another structural dimension to
+shrink without a pack-specific reducer while keeping every generated case
+system-valid. It is not a claim of a globally minimal semantic case.
+
+`counterweave.reduction/3` records every strategy attempt, before/candidate tape
+hashes, invalid candidates separately from infrastructure errors, the original
+and final tapes, and the final case and run hashes.
 
 ## Limits and next steps
 
@@ -197,5 +216,6 @@ The next steps are:
 3. add time-budgeted stopping, corpus promotion, and coverage feedback to
    bounded campaigns;
 4. add parallel campaigns without changing indexed trial identity;
-5. add pack-owned structural reduction hooks beyond integer draw reduction;
+5. add pack-owned semantic complexity objectives as an optional second phase
+   after generic choice-tape shrinking;
 6. build the first Flyology allocator refinement pack against production code.

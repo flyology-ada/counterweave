@@ -143,7 +143,7 @@ package body Counterweave.Campaigns is
       Content : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.campaign/2"","
+        & "  ""format"": ""counterweave.campaign/3"","
         & ASCII.LF
         & "  ""root_seed"": "
         & Counterweave.Strings.JSON_String
@@ -270,7 +270,7 @@ package body Counterweave.Campaigns is
         Counterweave.JSON.Member (Source, Configuration, "data_sha256");
       Result         : Counterweave.Strings.String_Vector;
    begin
-      if Format /= "counterweave.campaign/2" then
+      if Format /= "counterweave.campaign/3" then
          raise Campaign_Error with "unsupported campaign artifact format";
       elsif Counterweave.Hashes.SHA256_File (Model) /= Model_Hash then
          raise Campaign_Error with "campaign model hash has changed";
@@ -400,9 +400,9 @@ package body Counterweave.Campaigns is
             (Source, Counterweave.JSON.Member (Source, Item, Name)));
    begin
       if Member_Image (Original, Original_Root, "format")
-        /= """counterweave.campaign/2"""
+        /= """counterweave.campaign/3"""
         or else Member_Image (Replayed, Replayed_Root, "format")
-                /= """counterweave.campaign/2"""
+                /= """counterweave.campaign/3"""
         or else Member_Image (Original, Original_Root, "root_seed")
                 /= Member_Image (Replayed, Replayed_Root, "root_seed")
         or else Member_Image (Original, Original_Root, "maximum_trials")

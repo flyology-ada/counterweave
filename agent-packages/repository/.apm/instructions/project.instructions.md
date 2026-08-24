@@ -72,8 +72,9 @@ commands remain authoritative.
 - Semantic case identity canonicalizes JSON object order, whitespace, string
   escapes, and exact decimal spelling. Changing that persisted definition
   requires a new campaign and reduction artifact version.
-- Reduction must regenerate candidates through the model and retain one only
-  when the same property and failure fingerprint remain.
+- Reduction mutates recorded named-fork choices, normalizes each candidate to
+  the choices consumed during replay, regenerates it through the model, and
+  retains it only when the same property and failure fingerprint remain.
 - Execute adapters out of process with bounded deadlines and output. Preserve
   successful, failed, timed-out, output-limit, spawn-error, and
   malformed-protocol outcomes distinctly.

@@ -12,7 +12,8 @@ forks, exact choice replay, diversified one-solution MiniZinc completion,
 versioned case, run, campaign, and reduction artifacts, an explicit semantic
 adapter protocol, strict JSON decoding, bounded subprocess execution, automatic
 Flyology TUI presentation on real terminals, verified campaign replay,
-fingerprint-preserving reduction, and two independent Ada bug-discovery packs.
+recorded-choice shrinking with fingerprint preservation, and two independent
+Ada bug-discovery packs.
 
 ## Why constraints and randomness are separate
 
@@ -25,6 +26,11 @@ length-delimited named fork paths. Consuming one fork does not shift a sibling.
 The case records every consumed 64-bit value, not merely the seed.
 Serialized tapes include the injective fork key and can be decoded into a new
 Ada process for fail-closed replay.
+
+New tapes use a shrink-friendly bounded codec: raw values are reduced modulo
+the requested range and only the tiny upper rejection tail is discarded. Thus
+shrinking a recorded value toward zero normally shrinks the decoded choice
+toward the range's lower bound without biasing fresh generation.
 
 MiniZinc is the constraint-preserving completion engine, not the source of
 randomness. Counterweave asks it for one satisfying completion. Every model
@@ -176,8 +182,11 @@ bin/counterweave reduce \
 ```
 
 For the checked-in seed, reduction changes the generated history from 11 steps
-to 5 and reduces its balance and amount bounds. Each candidate is solved again,
-executed again, and retained only if the property and fingerprint are unchanged.
+to 5 and reduces its balance and amount bounds. Counterweave mutates the
+recorded choice tape with structural and value strategies, replays generation,
+and normalizes the candidate to the choices actually consumed. Each candidate
+is completed by MiniZinc, executed again, and retained only if the property and
+fingerprint are unchanged.
 
 ## Run a search manually
 
@@ -288,10 +297,11 @@ stays here.
   complete choice tape, recorded diversity seed, and solver provenance.
 - `counterweave.run/2` separates subprocess outcome from the parsed adapter
   result and binds both to case and adapter hashes.
-- `counterweave.campaign/2` records the complete search configuration and every
+- `counterweave.campaign/3` records the complete search configuration and every
   trial seed, outcome, property, fingerprint, and canonical semantic case hash.
-- `counterweave.reduction/2` records every candidate and the final reduced
-  parameters, case, run, property, and fingerprint.
+- `counterweave.reduction/3` records every choice-tape mutation, strategy,
+  outcome, normalized final tape, parameters, case, run, property, and
+  fingerprint.
 
 Exact execution replay needs only a case and adapter. Campaign replay invokes
 the model again and therefore verifies semantic case identity rather than

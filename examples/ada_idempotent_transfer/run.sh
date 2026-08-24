@@ -43,6 +43,10 @@ bin/counterweave reduce \
   --run-output "$reduced_run_file" \
   --report-output "$reduction_file"
 grep -q '"step_count":5' "$reduction_file"
+grep -q '"format": "counterweave.reduction/3"' "$reduction_file"
+grep -q '"strategy":"small-value"' "$reduction_file"
+grep -q '"final_choices_sha256"' "$reduction_file"
+grep -q '"values":\["0"\]' "$reduction_file"
 grep -q '"property": "transfers-are-idempotent"' "$reduction_file"
 grep -q '"failure_fingerprint": "duplicate-transfer-not-ignored"' "$reduction_file"
 for diversity_seed in 1 2; do

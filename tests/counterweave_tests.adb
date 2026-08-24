@@ -17,6 +17,7 @@ with GNAT.OS_Lib;
 procedure Counterweave_Tests is
 
    use type Counterweave.Choices.Choice_Value;
+   use type Counterweave.Choices.Shrink_Strategy;
    use type Counterweave.Adapter_Results.Verdict_Kind;
    use type Counterweave.Processes.Outcome_Kind;
 
@@ -153,7 +154,571 @@ procedure Counterweave_Tests is
             /= Counterweave.Choices.Draw (Right, Single_Segment),
             "fork derivation distinguishes path structure");
       end;
+
+      declare
+         Legacy_Path : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "legacy", 0);
+         Legacy      : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/1"","
+              & """algorithm"":""splitmix64-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""legacy[0]"","
+              & """key"":""6:legacy#0;"",""values"":[""10""]}]}");
+         Session     : Counterweave.Choices.Replay_Session :=
+           Counterweave.Choices.Replay (Legacy);
+      begin
+         Check
+           (Counterweave.Choices.Draw_Bounded (Session, Legacy_Path, 9) = 0,
+            "legacy choice tapes retain lower-rejection replay semantics");
+         Counterweave.Choices.Finish (Session);
+         Check
+           (Ada.Strings.Fixed.Index
+              (Counterweave.Choices.To_JSON (Legacy), "counterweave.choices/1")
+            /= 0,
+            "legacy choice tapes retain their persisted format");
+      end;
    end Test_Choices;
+
+   procedure Test_Choice_Shrinking is
+      Control             : constant Counterweave.Choices.Fork_Path :=
+        Counterweave.Choices.Child (Counterweave.Choices.Root, "control", 0);
+      Initial             : constant Counterweave.Choices.Choice_Tape :=
+        Counterweave.Choices.From_JSON
+          ("{""format"":""counterweave.choices/2"","
+           & """algorithm"":""splitmix64-v1"","
+           & """bounded"":""upper-rejection-v1"","
+           & """root_seed"":""42"",""forks"":["
+           & "{""path"":""control[0]"",""key"":""7:control#0;"","
+           & """values"":[""100""]},"
+           & "{""path"":""unused[0]"",""key"":""6:unused#0;"","
+           & """values"":[""99"",""88""]}]}");
+      Result              : Counterweave.Choices.Choice_Tape;
+      Saw_Fork_Deletion   : Boolean := False;
+      Saw_Value_Shrinking : Boolean := False;
+
+      procedure Evaluate
+        (Current   : Counterweave.Choices.Choice_Tape;
+         Candidate : in out Counterweave.Choices.Choice_Tape;
+         Strategy  : Counterweave.Choices.Shrink_Strategy;
+         Location  : String;
+         Preserved : out Boolean)
+      is
+         pragma Unreferenced (Current, Location);
+         Session : Counterweave.Choices.Replay_Session :=
+           Counterweave.Choices.Replay (Candidate);
+         Value   : Counterweave.Choices.Choice_Value;
+      begin
+         Value := Counterweave.Choices.Draw_Bounded (Session, Control, 10);
+         Candidate := Counterweave.Choices.Consumed (Session);
+         Preserved := Value <= 1;
+         Saw_Fork_Deletion :=
+           Saw_Fork_Deletion
+           or else Strategy = Counterweave.Choices.Delete_Fork;
+         Saw_Value_Shrinking :=
+           Saw_Value_Shrinking
+           or else Strategy = Counterweave.Choices.Small_Value;
+      exception
+         when Counterweave.Choices.Replay_Error =>
+            Preserved := False;
+      end Evaluate;
+
+      procedure Minimize is new
+        Counterweave.Choices.Shrink (Evaluate => Evaluate);
+   begin
+      Minimize (Initial, Result);
+      Check
+        (Counterweave.Choices.Fork_Count (Result) = 1,
+         "choice shrinking prunes an unconsumed fork");
+      Check
+        (Counterweave.Choices.Value_Count (Result) = 1,
+         "choice shrinking retains only the consumed stream");
+      declare
+         Session : Counterweave.Choices.Replay_Session :=
+           Counterweave.Choices.Replay (Result);
+      begin
+         Check
+           (Counterweave.Choices.Draw_Bounded (Session, Control, 10) = 0,
+            "choice shrinking minimizes the recorded bounded value");
+         Counterweave.Choices.Finish (Session);
+      end;
+      Check
+        (Saw_Fork_Deletion and then Saw_Value_Shrinking,
+         "choice shrinking composes structural and value strategies");
+      Check
+        (Ada.Strings.Fixed.Index
+           (Counterweave.Choices.To_JSON (Result),
+            """bounded"":""upper-rejection-v1""")
+         /= 0,
+         "choice tape records its shrink-friendly bounded codec");
+   end Test_Choice_Shrinking;
+
+   procedure Test_Choice_Shrink_Strategies is
+      type Value_Predicate is
+        access function
+          (Value : Counterweave.Choices.Choice_Value) return Boolean;
+
+      procedure Check_Single_Value_Strategy
+        (Initial_Value : Counterweave.Choices.Choice_Value;
+         Expected      : Counterweave.Choices.Choice_Value;
+         Strategy      : Counterweave.Choices.Shrink_Strategy;
+         Description   : String;
+         Preserves     : Value_Predicate)
+      is
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "single", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""single[0]"","
+              & """key"":""6:single#0;"",""values"":["
+              & Counterweave.Strings.JSON_String
+                  (Counterweave.Strings.Compact_Image (Initial_Value))
+              & "]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current            : Counterweave.Choices.Choice_Tape;
+            Candidate          : in out Counterweave.Choices.Choice_Tape;
+            Candidate_Strategy : Counterweave.Choices.Shrink_Strategy;
+            Location           : String;
+            Preserved          : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            Value   : Counterweave.Choices.Choice_Value;
+         begin
+            Value := Counterweave.Choices.Draw (Session, Path);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved := Preserves (Value);
+            Saw := Saw or else Candidate_Strategy = Strategy;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw
+               and then Counterweave.Choices.Draw (Session, Path) = Expected,
+               Description);
+            Counterweave.Choices.Finish (Session);
+         end;
+      end Check_Single_Value_Strategy;
+
+      function Halving_Preserves
+        (Value : Counterweave.Choices.Choice_Value) return Boolean
+      is (Value in 500 | 1_000);
+
+      function Clearing_Preserves
+        (Value : Counterweave.Choices.Choice_Value) return Boolean
+      is (Value in 14 | 15);
+
+      function Redistribution_Preserves
+        (Value : Counterweave.Choices.Choice_Value) return Boolean
+      is (Value in 17 | 20);
+   begin
+      Check_Single_Value_Strategy
+        (Initial_Value => 1_000,
+         Expected      => 500,
+         Strategy      => Counterweave.Choices.Halve_Value,
+         Description   => "choice shrinking halves raw values",
+         Preserves     => Halving_Preserves'Access);
+      Check_Single_Value_Strategy
+        (Initial_Value => 15,
+         Expected      => 14,
+         Strategy      => Counterweave.Choices.Clear_Bit,
+         Description   => "choice shrinking clears individual bits",
+         Preserves     => Clearing_Preserves'Access);
+      Check_Single_Value_Strategy
+        (Initial_Value => 20,
+         Expected      => 17,
+         Strategy      => Counterweave.Choices.Redistribute_Bit,
+         Description   => "choice shrinking redistributes set bits",
+         Preserves     => Redistribution_Preserves'Access);
+
+      declare
+         Control : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child
+             (Counterweave.Choices.Root, "control", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""control[0]"","
+              & """key"":""7:control#0;"",""values"":[""0""]},"
+              & "{""path"":""branch[0]/left[0]"","
+              & """key"":""6:branch#0;4:left#0;"",""values"":[""9""]},"
+              & "{""path"":""branch[0]/right[0]"","
+              & """key"":""6:branch#0;5:right#0;"",""values"":[""8""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+         begin
+            Preserved := Counterweave.Choices.Draw (Session, Control) = 0;
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Saw := Saw or else Strategy = Counterweave.Choices.Delete_Subtree;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         Check
+           (Saw and then Counterweave.Choices.Fork_Count (Result) = 1,
+            "choice shrinking deletes a named fork subtree");
+      end;
+
+      declare
+         Path_A  : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "a", 0);
+         Path_B  : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "b", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""a[0]"",""key"":""1:a#0;"","
+              & """values"":[""100""]},{""path"":""b[0]"","
+              & """key"":""1:b#0;"",""values"":[""100""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            Left    : Counterweave.Choices.Choice_Value;
+            Right   : Counterweave.Choices.Choice_Value;
+         begin
+            Left := Counterweave.Choices.Draw (Session, Path_A);
+            Right := Counterweave.Choices.Draw (Session, Path_B);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved := Left = Right;
+            Saw :=
+              Saw or else Strategy = Counterweave.Choices.Minimize_Duplicates;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         Check
+           (Saw,
+            "choice shrinking minimizes related duplicate values together");
+      end;
+
+      declare
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child
+             (Counterweave.Choices.Root, "boundary", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""boundary[0]"","
+              & """key"":""8:boundary#0;"",""values"":[""100""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            Value   : Counterweave.Choices.Choice_Value;
+         begin
+            Value := Counterweave.Choices.Draw (Session, Path);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved :=
+              Value = 100
+              or else Value = Counterweave.Choices.Choice_Value'Last;
+            Saw := Saw or else Strategy = Counterweave.Choices.Boundary_Value;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw
+               and then Counterweave.Choices.Draw (Session, Path)
+                        = Counterweave.Choices.Choice_Value'Last,
+               "choice shrinking preserves interesting boundary failures");
+            Counterweave.Choices.Finish (Session);
+         end;
+      end;
+
+      declare
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child (Counterweave.Choices.Root, "binary", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""binary[0]"","
+              & """key"":""6:binary#0;"",""values"":[""1024""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            Value   : Counterweave.Choices.Choice_Value;
+         begin
+            Value := Counterweave.Choices.Draw (Session, Path);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved := Value in 701 .. 1_024;
+            Saw := Saw or else Strategy = Counterweave.Choices.Binary_Search;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw and then Counterweave.Choices.Draw (Session, Path) = 701,
+               "choice shrinking binary-searches after midpoint rejection");
+            Counterweave.Choices.Finish (Session);
+         end;
+      end;
+
+      declare
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child
+             (Counterweave.Choices.Root, "sequence", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""sequence[0]"","
+              & """key"":""8:sequence#0;"",""values"":[""7"",""8""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            Value   : Counterweave.Choices.Choice_Value;
+         begin
+            Value := Counterweave.Choices.Draw (Session, Path);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved := Value = 7;
+            Saw := Saw or else Strategy = Counterweave.Choices.Delete_Chunk;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         Check
+           (Saw and then Counterweave.Choices.Value_Count (Result) = 1,
+            "choice shrinking deletes unused sequence chunks");
+      end;
+
+      declare
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child
+             (Counterweave.Choices.Root, "dependent", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""dependent[0]"","
+              & """key"":""9:dependent#0;"",""values"":[""10"",""99""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            First   : Counterweave.Choices.Choice_Value;
+            Second  : Counterweave.Choices.Choice_Value;
+         begin
+            First := Counterweave.Choices.Draw (Session, Path);
+            if First = 10 then
+               Second := Counterweave.Choices.Draw (Session, Path);
+               Preserved := Second = 99;
+               Candidate := Counterweave.Choices.Consumed (Session);
+            elsif First = 9 then
+               begin
+                  Second := Counterweave.Choices.Draw (Session, Path);
+                  Preserved := False;
+                  Candidate := Counterweave.Choices.Consumed (Session);
+               exception
+                  when Counterweave.Choices.Replay_Error =>
+                     Candidate := Counterweave.Choices.Consumed (Session);
+                     Preserved := True;
+               end;
+            else
+               Candidate := Counterweave.Choices.Consumed (Session);
+               Preserved := False;
+            end if;
+            Saw :=
+              Saw or else Strategy = Counterweave.Choices.Lower_And_Delete;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw
+               and then Counterweave.Choices.Value_Count (Result) = 1
+               and then Counterweave.Choices.Draw (Session, Path) = 9,
+               "choice shrinking lowers a value and deletes dependent data");
+            Counterweave.Choices.Finish (Session);
+         end;
+      end;
+
+      declare
+         Path    : constant Counterweave.Choices.Fork_Path :=
+           Counterweave.Choices.Child
+             (Counterweave.Choices.Root, "ordering", 0);
+         Initial : constant Counterweave.Choices.Choice_Tape :=
+           Counterweave.Choices.From_JSON
+             ("{""format"":""counterweave.choices/2"","
+              & """algorithm"":""splitmix64-v1"","
+              & """bounded"":""upper-rejection-v1"",""root_seed"":""1"","
+              & """forks"":[{""path"":""ordering[0]"","
+              & """key"":""8:ordering#0;"","
+              & """values"":[""9"",""1"",""8""]}]}");
+         Result  : Counterweave.Choices.Choice_Tape;
+         Saw     : Boolean := False;
+
+         procedure Evaluate
+           (Current   : Counterweave.Choices.Choice_Tape;
+            Candidate : in out Counterweave.Choices.Choice_Tape;
+            Strategy  : Counterweave.Choices.Shrink_Strategy;
+            Location  : String;
+            Preserved : out Boolean)
+         is
+            pragma Unreferenced (Current, Location);
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Candidate);
+            First   : Counterweave.Choices.Choice_Value;
+            Second  : Counterweave.Choices.Choice_Value;
+            Third   : Counterweave.Choices.Choice_Value;
+         begin
+            First := Counterweave.Choices.Draw (Session, Path);
+            Second := Counterweave.Choices.Draw (Session, Path);
+            Third := Counterweave.Choices.Draw (Session, Path);
+            Candidate := Counterweave.Choices.Consumed (Session);
+            Preserved :=
+              (First = 9 and then Second = 1 and then Third = 8)
+              or else (First = 8 and then Second = 1 and then Third = 9);
+            Saw := Saw or else Strategy = Counterweave.Choices.Reorder_Values;
+         exception
+            when Counterweave.Choices.Replay_Error =>
+               Preserved := False;
+         end Evaluate;
+
+         procedure Minimize is new
+           Counterweave.Choices.Shrink (Evaluate => Evaluate);
+      begin
+         Minimize (Initial, Result);
+         declare
+            Session : Counterweave.Choices.Replay_Session :=
+              Counterweave.Choices.Replay (Result);
+         begin
+            Check
+              (Saw
+               and then Counterweave.Choices.Draw (Session, Path) = 8
+               and then Counterweave.Choices.Draw (Session, Path) = 1
+               and then Counterweave.Choices.Draw (Session, Path) = 9,
+               "choice shrinking reorders non-adjacent values");
+            Counterweave.Choices.Finish (Session);
+         end;
+      end;
+   end Test_Choice_Shrink_Strategies;
 
    procedure Test_JSON is
       Source : constant String :=
@@ -603,7 +1168,7 @@ procedure Counterweave_Tests is
 
    procedure Test_Campaign_Replay is
       Original : constant String :=
-        "{""format"":""counterweave.campaign/2"","
+        "{""format"":""counterweave.campaign/3"","
         & """root_seed"":""42"",""maximum_trials"":2,"
         & """status"":""property-violation"",""attempts"":["
         & "{""index"":1,""seed"":""7"",""outcome"":""pass"","
@@ -617,6 +1182,23 @@ procedure Counterweave_Tests is
    begin
       Counterweave.Campaigns.Verify_Replay (Original, Original);
       Check (True, "verify equivalent campaign replay");
+      declare
+         Legacy : String := Original;
+         Raised : Boolean := False;
+         First  : constant Positive :=
+           Ada.Strings.Fixed.Index (Legacy, "campaign/3");
+      begin
+         Legacy (First + 9) := '2';
+         begin
+            Counterweave.Campaigns.Verify_Replay (Legacy, Legacy);
+         exception
+            when Counterweave.Campaigns.Campaign_Error =>
+               Raised := True;
+         end;
+         Check
+           (Raised,
+            "reject campaign artifacts with the earlier choice semantics");
+      end;
       declare
          Changed : String := Original;
          Raised  : Boolean := False;
@@ -763,6 +1345,8 @@ procedure Counterweave_Tests is
 
 begin
    Test_Choices;
+   Test_Choice_Shrinking;
+   Test_Choice_Shrink_Strategies;
    Test_JSON;
    Test_Paths;
    Test_CLI_Path_Safety;

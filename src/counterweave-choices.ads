@@ -41,7 +41,44 @@ package Counterweave.Choices is
    function Draw
      (Session : in out Replay_Session; Path : Fork_Path) return Choice_Value;
 
+   function Draw_Bounded
+     (Session : in out Replay_Session;
+      Path    : Fork_Path;
+      Maximum : Choice_Value) return Choice_Value;
+
+   function Consumed (Session : Replay_Session) return Choice_Tape;
+
    procedure Finish (Session : Replay_Session);
+
+   function Fork_Count (Tape : Choice_Tape) return Natural;
+
+   function Value_Count (Tape : Choice_Tape) return Natural;
+
+   type Shrink_Strategy is
+     (Delete_Subtree,
+      Delete_Fork,
+      Delete_Chunk,
+      Small_Value,
+      Boundary_Value,
+      Halve_Value,
+      Clear_Bit,
+      Redistribute_Bit,
+      Binary_Search,
+      Minimize_Duplicates,
+      Lower_And_Delete,
+      Reorder_Values);
+
+   function Image (Strategy : Shrink_Strategy) return String;
+
+   generic
+      with
+        procedure Evaluate
+          (Current   : Choice_Tape;
+           Candidate : in out Choice_Tape;
+           Strategy  : Shrink_Strategy;
+           Location  : String;
+           Preserved : out Boolean);
+   procedure Shrink (Initial : Choice_Tape; Result : out Choice_Tape);
 
    Choice_Error : exception;
    Replay_Error : exception;
@@ -71,9 +108,12 @@ private
        (Index_Type   => Natural,
         Element_Type => Fork_Record);
 
+   type Bounded_Algorithm is (Lower_Rejection_V1, Upper_Rejection_V1);
+
    type Choice_Tape is record
       Root_Seed : Choice_Value := 0;
       Forks     : Fork_Vectors.Vector;
+      Bounded   : Bounded_Algorithm := Upper_Rejection_V1;
    end record;
 
    package Position_Vectors is new
