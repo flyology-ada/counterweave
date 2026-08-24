@@ -210,7 +210,7 @@ package body Counterweave.Reduction_UI is
               & " "
               & Wide
                   (Image (Current_Steps)
-                   & " steps | inputs smaller; path unchanged");
+                   & " steps | replay choices smaller; path unchanged");
          else
             return
               Wide (Image (Original_Steps))
