@@ -4,26 +4,30 @@ with Interfaces;
 package Counterweave.JSON is
 
    type Value_Kind is
-     (Null_Value, Boolean_Value, Number_Value, String_Value, Array_Value, Object_Value);
+     (Null_Value,
+      Boolean_Value,
+      Number_Value,
+      String_Value,
+      Array_Value,
+      Object_Value);
 
    type Value is private;
 
    function Parse (Source : String) return Value;
 
    function Parse_At
-     (Source : String;
-      First  : Positive;
-      Last   : out Natural) return Value;
+     (Source : String; First : Positive; Last : out Natural) return Value;
 
    function Kind (Item : Value) return Value_Kind;
 
    function Image (Source : String; Item : Value) return String;
 
+   function Canonical_Image (Source : String; Item : Value) return String;
+
    function Has_Member
      (Source : String; Item : Value; Name : String) return Boolean;
 
-   function Member
-     (Source : String; Item : Value; Name : String) return Value;
+   function Member (Source : String; Item : Value; Name : String) return Value;
 
    function Length (Source : String; Item : Value) return Natural;
 

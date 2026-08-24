@@ -396,32 +396,32 @@ package body Counterweave.Reducers is
          return To_String (Result);
       end Parameters_JSON;
    begin
-      if Counterweave.Strings.Same_Path (Case_Output, Campaign_Path)
-        or else Counterweave.Strings.Same_Path (Run_Output, Campaign_Path)
-        or else Counterweave.Strings.Same_Path (Report_Output, Campaign_Path)
-        or else Counterweave.Strings.Same_Path
-                  (Case_Output, Retained_Case_Path)
-        or else Counterweave.Strings.Same_Path (Case_Output, Retained_Run_Path)
-        or else Counterweave.Strings.Same_Path (Run_Output, Retained_Case_Path)
-        or else Counterweave.Strings.Same_Path (Run_Output, Retained_Run_Path)
-        or else Counterweave.Strings.Same_Path
-                  (Report_Output, Retained_Case_Path)
-        or else Counterweave.Strings.Same_Path
-                  (Report_Output, Retained_Run_Path)
-        or else Counterweave.Strings.Same_Path (Case_Output, Run_Output)
-        or else Counterweave.Strings.Same_Path (Case_Output, Report_Output)
-        or else Counterweave.Strings.Same_Path (Run_Output, Report_Output)
-      then
-         raise Reduction_Error
-           with "reduction outputs must be distinct from retained evidence";
-      end if;
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append (Campaign_Path);
+         Inputs.Append (Counterweave.Artifacts.Executable_Path (Executable));
+         Inputs.Append (Counterweave.Artifacts.Executable_Path ("minizinc"));
+         Inputs.Append (Retained_Case_Path);
+         Inputs.Append (Retained_Run_Path);
+         Outputs.Append (Case_Output);
+         Outputs.Append (Run_Output);
+         Outputs.Append (Report_Output);
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "reduction");
+      exception
+         when Counterweave.Strings.Format_Error =>
+            raise Reduction_Error
+              with "reduction output aliases retained input";
+      end;
       declare
          Ignored : constant Counterweave.Strings.String_Vector :=
            Counterweave.Campaigns.Replay_Arguments
              (Source          => Campaign_Source,
               Case_Output     => Case_Output,
               Run_Output      => Run_Output,
-              Campaign_Output => Report_Output & ".campaign-check");
+              Campaign_Output => Report_Output);
       begin
          pragma Unreferenced (Ignored);
       end;
@@ -581,7 +581,7 @@ package body Counterweave.Reducers is
         (Report_Output,
          "{"
          & ASCII.LF
-         & "  ""format"": ""counterweave.reduction/1"","
+         & "  ""format"": ""counterweave.reduction/2"","
          & ASCII.LF
          & "  ""campaign_sha256"": "
          & Counterweave.Strings.JSON_String

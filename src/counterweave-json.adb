@@ -1,4 +1,6 @@
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Indefinite_Ordered_Sets;
+with Ada.Strings.Fixed;
 
 package body Counterweave.JSON is
 
@@ -6,6 +8,11 @@ package body Counterweave.JSON is
 
    package String_Sets is new
      Ada.Containers.Indefinite_Ordered_Sets (Element_Type => String);
+
+   package Canonical_Maps is new
+     Ada.Containers.Indefinite_Ordered_Maps
+       (Key_Type     => String,
+        Element_Type => String);
 
    procedure Skip_Whitespace (Source : String; Cursor : in out Natural) is
    begin
@@ -21,11 +28,14 @@ package body Counterweave.JSON is
       case Item is
          when '0' .. '9' =>
             return Character'Pos (Item) - Character'Pos ('0');
+
          when 'a' .. 'f' =>
             return Character'Pos (Item) - Character'Pos ('a') + 10;
+
          when 'A' .. 'F' =>
             return Character'Pos (Item) - Character'Pos ('A') + 10;
-         when others =>
+
+         when others     =>
             raise JSON_Error with "invalid hexadecimal JSON escape";
       end case;
    end Hex_Value;
@@ -42,9 +52,7 @@ package body Counterweave.JSON is
       return Result;
    end Hex_Code;
 
-   procedure Append_UTF8
-     (Result : in out Unbounded_String;
-      Code   : Natural) is
+   procedure Append_UTF8 (Result : in out Unbounded_String; Code : Natural) is
    begin
       if Code <= 16#7F# then
          Append (Result, Character'Val (Code));
@@ -73,13 +81,23 @@ package body Counterweave.JSON is
       Cursor := Cursor + 1;
       while Cursor <= Source'Last loop
          case Source (Cursor) is
-            when '"' =>
+            when '"'    =>
                Cursor := Cursor + 1;
                return;
-            when '\' =>
+
+            when '\'    =>
                Cursor := Cursor + 1;
                if Cursor > Source'Last
-                 or else Source (Cursor) not in '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u'
+                 or else Source (Cursor)
+                         not in '"'
+                              | '\'
+                              | '/'
+                              | 'b'
+                              | 'f'
+                              | 'n'
+                              | 'r'
+                              | 't'
+                              | 'u'
                then
                   raise JSON_Error with "invalid JSON string escape";
                end if;
@@ -89,7 +107,8 @@ package body Counterweave.JSON is
                   end if;
                   for Index in Cursor + 1 .. Cursor + 4 loop
                      declare
-                        Ignored : constant Natural := Hex_Value (Source (Index));
+                        Ignored : constant Natural :=
+                          Hex_Value (Source (Index));
                      begin
                         pragma Unreferenced (Ignored);
                      end;
@@ -97,6 +116,7 @@ package body Counterweave.JSON is
                   Cursor := Cursor + 4;
                end if;
                Cursor := Cursor + 1;
+
             when others =>
                if Character'Pos (Source (Cursor)) < 32 then
                   raise JSON_Error with "control character in JSON string";
@@ -108,17 +128,13 @@ package body Counterweave.JSON is
    end Parse_String_End;
 
    procedure Parse_Value
-     (Source : String;
-      Cursor : in out Natural;
-      Item   : out Value);
+     (Source : String; Cursor : in out Natural; Item : out Value);
 
    function Decode_String
      (Source : String; Item : Value) return Unbounded_String;
 
    procedure Expect_Literal
-     (Source  : String;
-      Cursor  : in out Natural;
-      Literal : String) is
+     (Source : String; Cursor : in out Natural; Literal : String) is
    begin
       if Cursor + Literal'Length - 1 > Source'Last
         or else Source (Cursor .. Cursor + Literal'Length - 1) /= Literal
@@ -142,7 +158,8 @@ package body Counterweave.JSON is
             raise JSON_Error with "leading zero in JSON number";
          end if;
       elsif Source (Cursor) in '1' .. '9' then
-         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9' loop
+         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9'
+         loop
             Cursor := Cursor + 1;
          end loop;
       else
@@ -153,7 +170,8 @@ package body Counterweave.JSON is
          if Cursor > Source'Last or else Source (Cursor) not in '0' .. '9' then
             raise JSON_Error with "invalid JSON fraction";
          end if;
-         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9' loop
+         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9'
+         loop
             Cursor := Cursor + 1;
          end loop;
       end if;
@@ -165,7 +183,8 @@ package body Counterweave.JSON is
          if Cursor > Source'Last or else Source (Cursor) not in '0' .. '9' then
             raise JSON_Error with "invalid JSON exponent";
          end if;
-         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9' loop
+         while Cursor <= Source'Last and then Source (Cursor) in '0' .. '9'
+         loop
             Cursor := Cursor + 1;
          end loop;
       end if;
@@ -248,9 +267,7 @@ package body Counterweave.JSON is
    end Parse_Object_End;
 
    procedure Parse_Value
-     (Source : String;
-      Cursor : in out Natural;
-      Item   : out Value)
+     (Source : String; Cursor : in out Natural; Item : out Value)
    is
       First : Natural;
       Form  : Value_Kind;
@@ -261,28 +278,35 @@ package body Counterweave.JSON is
       end if;
       First := Cursor;
       case Source (Cursor) is
-         when 'n' =>
+         when 'n'              =>
             Expect_Literal (Source, Cursor, "null");
             Form := Null_Value;
-         when 't' =>
+
+         when 't'              =>
             Expect_Literal (Source, Cursor, "true");
             Form := Boolean_Value;
-         when 'f' =>
+
+         when 'f'              =>
             Expect_Literal (Source, Cursor, "false");
             Form := Boolean_Value;
-         when '"' =>
+
+         when '"'              =>
             Parse_String_End (Source, Cursor);
             Form := String_Value;
-         when '[' =>
+
+         when '['              =>
             Parse_Array_End (Source, Cursor);
             Form := Array_Value;
-         when '{' =>
+
+         when '{'              =>
             Parse_Object_End (Source, Cursor);
             Form := Object_Value;
+
          when '-' | '0' .. '9' =>
             Parse_Number_End (Source, Cursor);
             Form := Number_Value;
-         when others =>
+
+         when others           =>
             raise JSON_Error with "invalid JSON value";
       end case;
       Item := (First => First, Last => Cursor - 1, Form => Form);
@@ -304,9 +328,7 @@ package body Counterweave.JSON is
    end Parse;
 
    function Parse_At
-     (Source : String;
-      First  : Positive;
-      Last   : out Natural) return Value
+     (Source : String; First : Positive; Last : out Natural) return Value
    is
       Cursor : Natural := First;
       Result : Value;
@@ -316,15 +338,353 @@ package body Counterweave.JSON is
       return Result;
    end Parse_At;
 
-   function Kind (Item : Value) return Value_Kind is (Item.Form);
+   function Kind (Item : Value) return Value_Kind
+   is (Item.Form);
 
    function Image (Source : String; Item : Value) return String is
    begin
-      if Item.First = 0 or else Item.Last < Item.First or else Item.Last > Source'Last then
+      if Item.First = 0
+        or else Item.Last < Item.First
+        or else Item.Last > Source'Last
+      then
          raise JSON_Error with "invalid JSON value view";
       end if;
       return Source (Item.First .. Item.Last);
    end Image;
+
+   function Quoted (Value : String) return String is
+      Hex    : constant String := "0123456789abcdef";
+      Result : Unbounded_String := To_Unbounded_String (String'(1 => '"'));
+   begin
+      for Item of Value loop
+         if Item = '"' or else Item = '\' then
+            Append (Result, '\');
+            Append (Result, Item);
+         elsif Character'Pos (Item) < 32 then
+            Append
+              (Result,
+               "\u00"
+               & Hex (Character'Pos (Item) / 16 + 1)
+               & Hex (Character'Pos (Item) mod 16 + 1));
+         else
+            Append (Result, Item);
+         end if;
+      end loop;
+      Append (Result, '"');
+      return To_String (Result);
+   end Quoted;
+
+   function Normalize_Decimal_Integer (Text : String) return String is
+      Cursor   : Natural := Text'First;
+      Negative : Boolean := False;
+   begin
+      if Cursor <= Text'Last and then Text (Cursor) in '+' | '-' then
+         Negative := Text (Cursor) = '-';
+         Cursor := Cursor + 1;
+      end if;
+      while Cursor <= Text'Last and then Text (Cursor) = '0' loop
+         Cursor := Cursor + 1;
+      end loop;
+      if Cursor > Text'Last then
+         return "0";
+      end if;
+      return (if Negative then "-" else "") & Text (Cursor .. Text'Last);
+   end Normalize_Decimal_Integer;
+
+   function Magnitude (Value : String) return String
+   is (if Value (Value'First) = '-'
+       then Value (Value'First + 1 .. Value'Last)
+       else Value);
+
+   function Add_Magnitudes (Left, Right : String) return String is
+      Result      : String (1 .. Natural'Max (Left'Length, Right'Length) + 1);
+      Left_Index  : Integer := Left'Last;
+      Right_Index : Integer := Right'Last;
+      Put_Index   : Natural := Result'Last;
+      Carry       : Natural := 0;
+   begin
+      while Left_Index >= Left'First
+        or else Right_Index >= Right'First
+        or else Carry /= 0
+      loop
+         declare
+            Digit : Natural := Carry;
+         begin
+            if Left_Index >= Left'First then
+               Digit :=
+                 Digit
+                 + Character'Pos (Left (Left_Index))
+                 - Character'Pos ('0');
+               Left_Index := Left_Index - 1;
+            end if;
+            if Right_Index >= Right'First then
+               Digit :=
+                 Digit
+                 + Character'Pos (Right (Right_Index))
+                 - Character'Pos ('0');
+               Right_Index := Right_Index - 1;
+            end if;
+            Result (Put_Index) :=
+              Character'Val (Character'Pos ('0') + Digit mod 10);
+            Carry := Digit / 10;
+            Put_Index := Put_Index - 1;
+         end;
+      end loop;
+      return Result (Put_Index + 1 .. Result'Last);
+   end Add_Magnitudes;
+
+   function Compare_Magnitudes (Left, Right : String) return Integer is
+   begin
+      if Left'Length < Right'Length then
+         return -1;
+      elsif Left'Length > Right'Length then
+         return 1;
+      elsif Left < Right then
+         return -1;
+      elsif Left > Right then
+         return 1;
+      end if;
+      return 0;
+   end Compare_Magnitudes;
+
+   function Subtract_Magnitudes (Left, Right : String) return String is
+      Result      : String (1 .. Left'Length);
+      Left_Index  : Integer := Left'Last;
+      Right_Index : Integer := Right'Last;
+      Put_Index   : Natural := Result'Last;
+      Borrow      : Integer := 0;
+   begin
+      while Left_Index >= Left'First loop
+         declare
+            Digit : Integer :=
+              Character'Pos (Left (Left_Index)) - Character'Pos ('0') - Borrow;
+         begin
+            if Right_Index >= Right'First then
+               Digit :=
+                 Digit
+                 - Character'Pos (Right (Right_Index))
+                 + Character'Pos ('0');
+               Right_Index := Right_Index - 1;
+            end if;
+            if Digit < 0 then
+               Digit := Digit + 10;
+               Borrow := 1;
+            else
+               Borrow := 0;
+            end if;
+            Result (Put_Index) := Character'Val (Character'Pos ('0') + Digit);
+            Left_Index := Left_Index - 1;
+            Put_Index := Put_Index - 1;
+         end;
+      end loop;
+      declare
+         First : Natural := Result'First;
+      begin
+         while First < Result'Last and then Result (First) = '0' loop
+            First := First + 1;
+         end loop;
+         return Result (First .. Result'Last);
+      end;
+   end Subtract_Magnitudes;
+
+   function Add_Decimal_Integer
+     (Left : String; Right : Long_Long_Integer) return String
+   is
+      Normalized_Left  : constant String := Normalize_Decimal_Integer (Left);
+      Normalized_Right : constant String :=
+        Normalize_Decimal_Integer
+          (Ada.Strings.Fixed.Trim
+             (Long_Long_Integer'Image (Right), Ada.Strings.Both));
+      Left_Negative    : constant Boolean :=
+        Normalized_Left (Normalized_Left'First) = '-';
+      Right_Negative   : constant Boolean :=
+        Normalized_Right (Normalized_Right'First) = '-';
+      Left_Magnitude   : constant String := Magnitude (Normalized_Left);
+      Right_Magnitude  : constant String := Magnitude (Normalized_Right);
+   begin
+      if Normalized_Left = "0" then
+         return Normalized_Right;
+      elsif Normalized_Right = "0" then
+         return Normalized_Left;
+      elsif Left_Negative = Right_Negative then
+         return
+           (if Left_Negative then "-" else "")
+           & Add_Magnitudes (Left_Magnitude, Right_Magnitude);
+      end if;
+      case Compare_Magnitudes (Left_Magnitude, Right_Magnitude) is
+         when -1     =>
+            return
+              (if Right_Negative then "-" else "")
+              & Subtract_Magnitudes (Right_Magnitude, Left_Magnitude);
+
+         when 0      =>
+            return "0";
+
+         when others =>
+            return
+              (if Left_Negative then "-" else "")
+              & Subtract_Magnitudes (Left_Magnitude, Right_Magnitude);
+      end case;
+   end Add_Decimal_Integer;
+
+   function Canonical_Number (Text : String) return String is
+      Cursor          : Natural := Text'First;
+      Negative        : Boolean := False;
+      Fraction_Length : Natural := 0;
+      Digit_Buffer    : Unbounded_String;
+      Exponent        : Unbounded_String := To_Unbounded_String ("0");
+   begin
+      if Text (Cursor) = '-' then
+         Negative := True;
+         Cursor := Cursor + 1;
+      end if;
+      while Cursor <= Text'Last and then Text (Cursor) in '0' .. '9' loop
+         Append (Digit_Buffer, Text (Cursor));
+         Cursor := Cursor + 1;
+      end loop;
+      if Cursor <= Text'Last and then Text (Cursor) = '.' then
+         Cursor := Cursor + 1;
+         while Cursor <= Text'Last and then Text (Cursor) in '0' .. '9' loop
+            Append (Digit_Buffer, Text (Cursor));
+            Fraction_Length := Fraction_Length + 1;
+            Cursor := Cursor + 1;
+         end loop;
+      end if;
+      if Cursor <= Text'Last and then Text (Cursor) in 'e' | 'E' then
+         Exponent :=
+           To_Unbounded_String
+             (Normalize_Decimal_Integer (Text (Cursor + 1 .. Text'Last)));
+      end if;
+
+      declare
+         All_Digits : constant String := To_String (Digit_Buffer);
+         First      : Natural := All_Digits'First;
+         Last       : Natural := All_Digits'Last;
+         Removed    : Natural := 0;
+      begin
+         while First <= Last and then All_Digits (First) = '0' loop
+            First := First + 1;
+         end loop;
+         if First > Last then
+            return "0";
+         end if;
+         while Last > First and then All_Digits (Last) = '0' loop
+            Last := Last - 1;
+            Removed := Removed + 1;
+         end loop;
+         declare
+            Adjusted_Exponent : constant String :=
+              Add_Decimal_Integer
+                (To_String (Exponent),
+                 Long_Long_Integer (Removed)
+                 - Long_Long_Integer (Fraction_Length));
+            Significant       : constant String := All_Digits (First .. Last);
+         begin
+            return
+              (if Negative then "-" else "")
+              & Significant
+              & (if Adjusted_Exponent = "0"
+                 then ""
+                 else "e" & Adjusted_Exponent);
+         end;
+      end;
+   end Canonical_Number;
+
+   function Canonical_Image (Source : String; Item : Value) return String is
+      function Canonical (Node : Value) return String;
+
+      function Canonical (Node : Value) return String is
+      begin
+         case Node.Form is
+            when Null_Value    =>
+               return "null";
+
+            when Boolean_Value =>
+               return (if As_Boolean (Source, Node) then "true" else "false");
+
+            when Number_Value  =>
+               return Canonical_Number (Image (Source, Node));
+
+            when String_Value  =>
+               return Quoted (To_String (Decode_String (Source, Node)));
+
+            when Array_Value   =>
+               declare
+                  Cursor : Natural := Node.First + 1;
+                  Child  : Value;
+                  Result : Unbounded_String := To_Unbounded_String ("[");
+                  First  : Boolean := True;
+               begin
+                  Skip_Whitespace (Source, Cursor);
+                  while Cursor < Node.Last loop
+                     Parse_Value (Source, Cursor, Child);
+                     if First then
+                        First := False;
+                     else
+                        Append (Result, ",");
+                     end if;
+                     Append (Result, Canonical (Child));
+                     Skip_Whitespace (Source, Cursor);
+                     exit when Cursor >= Node.Last;
+                     Cursor := Cursor + 1;
+                     Skip_Whitespace (Source, Cursor);
+                  end loop;
+                  Append (Result, "]");
+                  return To_String (Result);
+               end;
+
+            when Object_Value  =>
+               declare
+                  Cursor  : Natural := Node.First + 1;
+                  Key     : Value;
+                  Child   : Value;
+                  Members : Canonical_Maps.Map;
+                  Result  : Unbounded_String := To_Unbounded_String ("{");
+                  First   : Boolean := True;
+               begin
+                  Skip_Whitespace (Source, Cursor);
+                  while Cursor < Node.Last loop
+                     declare
+                        Key_First : constant Natural := Cursor;
+                     begin
+                        Parse_String_End (Source, Cursor);
+                        Key :=
+                          (First => Key_First,
+                           Last  => Cursor - 1,
+                           Form  => String_Value);
+                     end;
+                     Skip_Whitespace (Source, Cursor);
+                     Cursor := Cursor + 1;
+                     Skip_Whitespace (Source, Cursor);
+                     Parse_Value (Source, Cursor, Child);
+                     Members.Insert
+                       (To_String (Decode_String (Source, Key)),
+                        Canonical (Child));
+                     Skip_Whitespace (Source, Cursor);
+                     exit when Cursor >= Node.Last;
+                     Cursor := Cursor + 1;
+                     Skip_Whitespace (Source, Cursor);
+                  end loop;
+                  for Position in Members.Iterate loop
+                     if First then
+                        First := False;
+                     else
+                        Append (Result, ",");
+                     end if;
+                     Append
+                       (Result,
+                        Quoted (Canonical_Maps.Key (Position))
+                        & ":"
+                        & Canonical_Maps.Element (Position));
+                  end loop;
+                  Append (Result, "}");
+                  return To_String (Result);
+               end;
+         end case;
+      end Canonical;
+   begin
+      return Canonical (Item);
+   end Canonical_Image;
 
    function Decode_String
      (Source : String; Item : Value) return Unbounded_String
@@ -345,22 +705,28 @@ package body Counterweave.JSON is
                when '"' | '\' | '/' =>
                   Append (Result, Source (Cursor));
                   Cursor := Cursor + 1;
-               when 'b' =>
+
+               when 'b'             =>
                   Append (Result, ASCII.BS);
                   Cursor := Cursor + 1;
-               when 'f' =>
+
+               when 'f'             =>
                   Append (Result, ASCII.FF);
                   Cursor := Cursor + 1;
-               when 'n' =>
+
+               when 'n'             =>
                   Append (Result, ASCII.LF);
                   Cursor := Cursor + 1;
-               when 'r' =>
+
+               when 'r'             =>
                   Append (Result, ASCII.CR);
                   Cursor := Cursor + 1;
-               when 't' =>
+
+               when 't'             =>
                   Append (Result, ASCII.HT);
                   Cursor := Cursor + 1;
-               when 'u' =>
+
+               when 'u'             =>
                   declare
                      Code : Natural := Hex_Code (Source, Cursor + 1);
                   begin
@@ -370,15 +736,22 @@ package body Counterweave.JSON is
                           or else Source (Cursor) /= '\'
                           or else Source (Cursor + 1) /= 'u'
                         then
-                           raise JSON_Error with "unpaired high Unicode surrogate";
+                           raise JSON_Error
+                             with "unpaired high Unicode surrogate";
                         end if;
                         declare
-                           Low : constant Natural := Hex_Code (Source, Cursor + 2);
+                           Low : constant Natural :=
+                             Hex_Code (Source, Cursor + 2);
                         begin
                            if Low not in 16#DC00# .. 16#DFFF# then
-                              raise JSON_Error with "invalid low Unicode surrogate";
+                              raise JSON_Error
+                                with "invalid low Unicode surrogate";
                            end if;
-                           Code := 16#10000# + (Code - 16#D800#) * 1_024 + Low - 16#DC00#;
+                           Code :=
+                             16#10000#
+                             + (Code - 16#D800#) * 1_024
+                             + Low
+                             - 16#DC00#;
                            Cursor := Cursor + 6;
                         end;
                      elsif Code in 16#DC00# .. 16#DFFF# then
@@ -386,7 +759,8 @@ package body Counterweave.JSON is
                      end if;
                      Append_UTF8 (Result, Code);
                   end;
-               when others =>
+
+               when others          =>
                   raise JSON_Error with "invalid JSON string escape";
             end case;
          end if;
@@ -394,12 +768,10 @@ package body Counterweave.JSON is
       return Result;
    end Decode_String;
 
-   function As_String
-     (Source : String; Item : Value) return Unbounded_String
+   function As_String (Source : String; Item : Value) return Unbounded_String
    is (Decode_String (Source, Item));
 
-   function Member
-     (Source : String; Item : Value; Name : String) return Value
+   function Member (Source : String; Item : Value; Name : String) return Value
    is
       Cursor     : Natural := Item.First + 1;
       Key        : Value;
@@ -414,7 +786,8 @@ package body Counterweave.JSON is
             Key_First : constant Natural := Cursor;
          begin
             Parse_String_End (Source, Cursor);
-            Key := (First => Key_First, Last => Cursor - 1, Form => String_Value);
+            Key :=
+              (First => Key_First, Last => Cursor - 1, Form => String_Value);
          end;
          Skip_Whitespace (Source, Cursor);
          Cursor := Cursor + 1;
@@ -490,8 +863,8 @@ package body Counterweave.JSON is
       raise JSON_Error with "JSON array index is out of range";
    end Element;
 
-   function As_Integer
-     (Source : String; Item : Value) return Long_Long_Integer is
+   function As_Integer (Source : String; Item : Value) return Long_Long_Integer
+   is
    begin
       if Item.Form /= Number_Value then
          raise JSON_Error with "JSON value is not a number";
@@ -513,7 +886,9 @@ package body Counterweave.JSON is
      (Source : String; Item : Value) return Interfaces.Unsigned_64 is
    begin
       if Item.Form = String_Value then
-         return Interfaces.Unsigned_64'Value (To_String (Decode_String (Source, Item)));
+         return
+           Interfaces.Unsigned_64'Value
+             (To_String (Decode_String (Source, Item)));
       elsif Item.Form = Number_Value then
          return Interfaces.Unsigned_64'Value (Image (Source, Item));
       else

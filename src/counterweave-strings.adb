@@ -123,6 +123,32 @@ package body Counterweave.Strings is
         and then Normalized_Left = Normalized_Right;
    end Same_Path;
 
+   procedure Validate_Output_Paths
+     (Inputs : String_Vector; Outputs : String_Vector; Context : String) is
+   begin
+      for Output_Index in Outputs.First_Index .. Outputs.Last_Index loop
+         declare
+            Output_Path : constant String := Outputs (Output_Index);
+         begin
+            for Input_Path of Inputs loop
+               if Input_Path'Length > 0
+                 and then Same_Path (Output_Path, Input_Path)
+               then
+                  raise Format_Error
+                    with Context & " output aliases an input: " & Output_Path;
+               end if;
+            end loop;
+            for Earlier in Outputs.First_Index .. Output_Index loop
+               exit when Earlier = Output_Index;
+               if Same_Path (Output_Path, Outputs (Earlier)) then
+                  raise Format_Error
+                    with Context & " outputs must be distinct: " & Output_Path;
+               end if;
+            end loop;
+         end;
+      end loop;
+   end Validate_Output_Paths;
+
    function JSON_String (Value : String) return String is
       Result : Unbounded_String := To_Unbounded_String (String'(1 => '"'));
    begin

@@ -143,7 +143,7 @@ package body Counterweave.Campaigns is
       Content : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.campaign/1"","
+        & "  ""format"": ""counterweave.campaign/2"","
         & ASCII.LF
         & "  ""root_seed"": "
         & Counterweave.Strings.JSON_String
@@ -260,31 +260,17 @@ package body Counterweave.Campaigns is
         String_Member (Configuration, "adapter");
       Adapter_Hash   : constant String :=
         String_Member (Configuration, "adapter_sha256");
+      Retained_Case  : constant String :=
+        String_Member (Configuration, "case_output");
+      Retained_Run   : constant String :=
+        String_Member (Configuration, "run_output");
       Data_Node      : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member (Source, Configuration, "data");
       Data_Hash_Node : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member (Source, Configuration, "data_sha256");
       Result         : Counterweave.Strings.String_Vector;
    begin
-      if Counterweave.Strings.Same_Path
-           (Case_Output, String_Member (Configuration, "case_output"))
-        or else Counterweave.Strings.Same_Path
-                  (Run_Output, String_Member (Configuration, "run_output"))
-        or else Counterweave.Strings.Same_Path
-                  (Campaign_Output,
-                   String_Member (Configuration, "case_output"))
-        or else Counterweave.Strings.Same_Path
-                  (Campaign_Output,
-                   String_Member (Configuration, "run_output"))
-        or else Counterweave.Strings.Same_Path
-                  (Case_Output, String_Member (Configuration, "run_output"))
-        or else Counterweave.Strings.Same_Path
-                  (Run_Output, String_Member (Configuration, "case_output"))
-      then
-         raise Campaign_Error
-           with "campaign replay must not overwrite retained evidence";
-      end if;
-      if Format /= "counterweave.campaign/1" then
+      if Format /= "counterweave.campaign/2" then
          raise Campaign_Error with "unsupported campaign artifact format";
       elsif Counterweave.Hashes.SHA256_File (Model) /= Model_Hash then
          raise Campaign_Error with "campaign model hash has changed";
@@ -310,6 +296,31 @@ package body Counterweave.Campaigns is
       then
          raise Campaign_Error with "campaign data provenance is malformed";
       end if;
+
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append (Model);
+         Inputs.Append (Counterweave.Artifacts.Executable_Path (Adapter));
+         Inputs.Append (Counterweave.Artifacts.Executable_Path ("minizinc"));
+         Inputs.Append (Retained_Case);
+         Inputs.Append (Retained_Run);
+         if Counterweave.JSON.Kind (Data_Node) = Counterweave.JSON.String_Value
+         then
+            Inputs.Append
+              (To_String (Counterweave.JSON.As_String (Source, Data_Node)));
+         end if;
+         Outputs.Append (Case_Output);
+         Outputs.Append (Run_Output);
+         Outputs.Append (Campaign_Output);
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "campaign replay");
+      exception
+         when Counterweave.Strings.Format_Error =>
+            raise Campaign_Error
+              with "campaign replay output aliases retained input";
+      end;
 
       Result.Append ("search");
       Result.Append ("--model");
@@ -389,9 +400,9 @@ package body Counterweave.Campaigns is
             (Source, Counterweave.JSON.Member (Source, Item, Name)));
    begin
       if Member_Image (Original, Original_Root, "format")
-        /= """counterweave.campaign/1"""
+        /= """counterweave.campaign/2"""
         or else Member_Image (Replayed, Replayed_Root, "format")
-                /= """counterweave.campaign/1"""
+                /= """counterweave.campaign/2"""
         or else Member_Image (Original, Original_Root, "root_seed")
                 /= Member_Image (Replayed, Replayed_Root, "root_seed")
         or else Member_Image (Original, Original_Root, "maximum_trials")

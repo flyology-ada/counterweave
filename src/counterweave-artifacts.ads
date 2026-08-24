@@ -39,6 +39,8 @@ package Counterweave.Artifacts is
 
    function Case_Replay_SHA256 (Source : String) return String;
 
+   function Executable_Path (Program : String) return String;
+
    function Executable_SHA256 (Program : String) return String;
 
    procedure Write_Run

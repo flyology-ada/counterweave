@@ -6,7 +6,11 @@ output_dir=${COUNTERWEAVE_OUTPUT_DIR:-/tmp}
 case_file=$output_dir/counterweave-stale-handle.cwcase
 run_file=$output_dir/counterweave-stale-handle.cwrun
 campaign_file=$output_dir/counterweave-stale-handle.cwcampaign
+unsupported_case=$output_dir/counterweave-stale-handle-unsupported.cwcase
+unsupported_error=$output_dir/counterweave-stale-handle-unsupported.stderr
 solver=${COUNTERWEAVE_SOLVER:-cp-sat}
+
+trap 'rm -f "$unsupported_case" "$unsupported_error"' EXIT HUP INT TERM
 
 cd "$root"
 alr -n build
@@ -36,6 +40,14 @@ grep -q '"index":7,"operation":"read","status":"ok"' "$run_file"
 grep -q '"old_generation": 1,"new_generation": 1' "$run_file"
 grep -q '"status": "property-violation"' "$campaign_file"
 grep -q '"failure_fingerprint":"stale-read-accepted"' "$campaign_file"
+sed 's/"version": "1"/"version": "2"/' \
+  "$case_file" > "$unsupported_case"
+if bin/stale_handle_adapter --case "$unsupported_case" \
+  > /dev/null 2> "$unsupported_error"; then
+  echo "unsupported stale-handle pack version was accepted" >&2
+  exit 1
+fi
+grep -q 'unsupported model pack: ada-stale-handle/2' "$unsupported_error"
 if [ ! -t 1 ]; then
   echo "bug reproduced; evidence: $run_file"
 fi

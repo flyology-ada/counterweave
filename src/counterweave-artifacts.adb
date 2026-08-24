@@ -59,11 +59,11 @@ package body Counterweave.Artifacts is
       return To_String (Result);
    end Arguments_JSON;
 
-   function Executable_SHA256 (Program : String) return String is
+   function Executable_Path (Program : String) return String is
       Located : GNAT.OS_Lib.String_Access := null;
    begin
       if Ada.Directories.Exists (Program) then
-         return Counterweave.Hashes.SHA256_File (Program);
+         return GNAT.OS_Lib.Normalize_Pathname (Program);
       end if;
       Located := GNAT.OS_Lib.Locate_Exec_On_Path (Program);
       if Located = null then
@@ -71,7 +71,7 @@ package body Counterweave.Artifacts is
       end if;
       declare
          Result : constant String :=
-           Counterweave.Hashes.SHA256_File (Located.all);
+           GNAT.OS_Lib.Normalize_Pathname (Located.all);
       begin
          GNAT.OS_Lib.Free (Located);
          return Result;
@@ -79,6 +79,18 @@ package body Counterweave.Artifacts is
    exception
       when others =>
          GNAT.OS_Lib.Free (Located);
+         return "";
+   end Executable_Path;
+
+   function Executable_SHA256 (Program : String) return String is
+      Path : constant String := Executable_Path (Program);
+   begin
+      if Path'Length = 0 then
+         return "";
+      end if;
+      return Counterweave.Hashes.SHA256_File (Path);
+   exception
+      when others =>
          return "";
    end Executable_SHA256;
 
@@ -191,20 +203,20 @@ package body Counterweave.Artifacts is
         Counterweave.JSON.Member (Source, Root, "payload");
       Stable_View : constant String :=
         "{""pack"":"
-        & Counterweave.JSON.Image (Source, Pack)
+        & Counterweave.JSON.Canonical_Image (Source, Pack)
         & ",""intent"":"
-        & Counterweave.JSON.Image (Source, Intent)
+        & Counterweave.JSON.Canonical_Image (Source, Intent)
         & ",""choices"":"
-        & Counterweave.JSON.Image (Source, Choices)
+        & Counterweave.JSON.Canonical_Image (Source, Choices)
         & ",""model_sha256"":"
-        & Counterweave.JSON.Image
+        & Counterweave.JSON.Canonical_Image
             (Source, Counterweave.JSON.Member (Source, Model, "model_sha256"))
         & ",""diversity_seed"":"
-        & Counterweave.JSON.Image
+        & Counterweave.JSON.Canonical_Image
             (Source,
              Counterweave.JSON.Member (Source, Model, "diversity_seed"))
         & ",""payload"":"
-        & Counterweave.JSON.Image (Source, Payload)
+        & Counterweave.JSON.Canonical_Image (Source, Payload)
         & "}";
    begin
       return Counterweave.Hashes.SHA256 (Stable_View);

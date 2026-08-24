@@ -119,6 +119,14 @@ recorded provenance before running, and then compares those semantic fields for
 every attempt. The flattened solver artifact remains diagnostic: MiniZinc can
 emit byte-different FlatZinc for an equivalent materialized case.
 
+`counterweave.campaign/2` defines semantic case identity through canonical JSON:
+object members are sorted, strings are decoded and re-encoded consistently,
+whitespace is removed, and exact decimal values are normalized without
+floating-point conversion. This keeps equivalent pack payloads identical while
+retaining array order and every semantically distinct value. Reduction reports
+using that identity are `counterweave.reduction/2`; earlier artifact versions
+are rejected rather than interpreted with the new hash definition.
+
 The campaign UI is incremental rather than a long opaque action. A Flyology
 TUI command executes one complete trial, its application message updates the
 dashboard, and the next indexed command is scheduled only after that update.

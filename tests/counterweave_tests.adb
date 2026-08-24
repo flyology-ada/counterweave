@@ -9,6 +9,7 @@ with Counterweave.Artifacts;
 with Counterweave.Campaigns;
 with Counterweave.Choices;
 with Counterweave.Hashes;
+with Counterweave.JSON;
 with Counterweave.Processes;
 with Counterweave.Strings;
 with GNAT.OS_Lib;
@@ -246,6 +247,29 @@ procedure Counterweave_Tests is
          end;
          Check (Raised, "reject duplicate JSON object members");
       end;
+
+      declare
+         Exponent     : constant String := "100000000000000000000000";
+         Left_Source  : constant String :=
+           "{""b"":1.00e+" & Exponent & "2," & """a"":""\u0061"",""c"":-0.0}";
+         Right_Source : constant String :=
+           " { ""c"" : 0, ""a"" : ""a"", "
+           & """b"" : 100e"
+           & Exponent
+           & "0 } ";
+         Left         : constant Counterweave.JSON.Value :=
+           Counterweave.JSON.Parse (Left_Source);
+         Right        : constant Counterweave.JSON.Value :=
+           Counterweave.JSON.Parse (Right_Source);
+         Left_Image   : constant String :=
+           Counterweave.JSON.Canonical_Image (Left_Source, Left);
+         Right_Image  : constant String :=
+           Counterweave.JSON.Canonical_Image (Right_Source, Right);
+      begin
+         Check
+           (Left_Image = Right_Image,
+            "canonicalize JSON order, strings, numbers, and whitespace");
+      end;
    end Test_JSON;
 
    procedure Test_Paths is
@@ -261,7 +285,129 @@ procedure Counterweave_Tests is
                (Current & "/counterweave-path-test-a",
                 Current & "/counterweave-path-test-b"),
          "distinguish different artifact paths");
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+         Raised  : Boolean := False;
+      begin
+         Inputs.Append (Current & "/counterweave-path-test");
+         Outputs.Append (Current & "/./counterweave-path-test");
+         begin
+            Counterweave.Strings.Validate_Output_Paths
+              (Inputs, Outputs, "test");
+         exception
+            when Counterweave.Strings.Format_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject an output that aliases an input");
+      end;
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+         Raised  : Boolean := False;
+      begin
+         Outputs.Append (Current & "/counterweave-path-test");
+         Outputs.Append (Current & "/./counterweave-path-test");
+         begin
+            Counterweave.Strings.Validate_Output_Paths
+              (Inputs, Outputs, "test");
+         exception
+            when Counterweave.Strings.Format_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject aliased sibling outputs");
+      end;
    end Test_Paths;
+
+   procedure Test_CLI_Path_Safety is
+      PID       : constant String :=
+        Counterweave.Strings.Compact_Image
+          (Long_Long_Integer
+             (GNAT.OS_Lib.Pid_To_Integer (GNAT.OS_Lib.Current_Process_Id)));
+      Path      : constant String :=
+        "/tmp/counterweave-cli-path-test-" & PID & ".json";
+      Run_Path  : constant String := Path & ".run";
+      Log_Path  : constant String := Path & ".campaign";
+      Program   : constant String :=
+        Ada.Directories.Compose
+          (Ada.Directories.Containing_Directory
+             (Ada.Command_Line.Command_Name),
+           "counterweave");
+      Arguments : Counterweave.Strings.String_Vector;
+   begin
+      Counterweave.Strings.Write_File_Atomically (Path, "retained input");
+      declare
+         Before : constant String := Counterweave.Strings.Read_File (Path);
+      begin
+         Arguments.Append ("execute");
+         Arguments.Append ("--case");
+         Arguments.Append (Path);
+         Arguments.Append ("--adapter");
+         Arguments.Append ("/usr/bin/false");
+         Arguments.Append ("--output");
+         Arguments.Append (Path);
+         declare
+            Result : constant Counterweave.Processes.Process_Result :=
+              Counterweave.Processes.Run (Program, Arguments, 1_000);
+         begin
+            Check
+              (Result.Outcome = Counterweave.Processes.Failed,
+               "CLI rejects an output that aliases its case input");
+            Check
+              (Counterweave.Strings.Read_File (Path) = Before,
+               "CLI path rejection preserves its input bytes");
+            Check
+              (Ada.Strings.Fixed.Index
+                 (Ada.Strings.Unbounded.To_String (Result.Standard_Error),
+                  "output aliases an input")
+               /= 0,
+               "CLI reports the path collision before decoding the case");
+         end;
+
+         Arguments.Clear;
+         Arguments.Append ("search");
+         Arguments.Append ("--model");
+         Arguments.Append (Path);
+         Arguments.Append ("--adapter");
+         Arguments.Append ("/usr/bin/false");
+         Arguments.Append ("--pack");
+         Arguments.Append ("test");
+         Arguments.Append ("--case-output");
+         Arguments.Append (Path);
+         Arguments.Append ("--run-output");
+         Arguments.Append (Run_Path);
+         Arguments.Append ("--campaign-output");
+         Arguments.Append (Log_Path);
+         declare
+            Result : constant Counterweave.Processes.Process_Result :=
+              Counterweave.Processes.Run (Program, Arguments, 1_000);
+         begin
+            Check
+              (Result.Outcome = Counterweave.Processes.Failed,
+               "search rejects an output that aliases its model input");
+            Check
+              (Counterweave.Strings.Read_File (Path) = Before,
+               "search path rejection preserves its model bytes");
+            Check
+              (not Ada.Directories.Exists (Run_Path)
+               and then not Ada.Directories.Exists (Log_Path),
+               "search rejects collisions before creating evidence");
+         end;
+      end;
+      Ada.Directories.Delete_File (Path);
+   exception
+      when others =>
+         if Ada.Directories.Exists (Path) then
+            Ada.Directories.Delete_File (Path);
+         end if;
+         if Ada.Directories.Exists (Run_Path) then
+            Ada.Directories.Delete_File (Run_Path);
+         end if;
+         if Ada.Directories.Exists (Log_Path) then
+            Ada.Directories.Delete_File (Log_Path);
+         end if;
+         raise;
+   end Test_CLI_Path_Safety;
 
    procedure Test_Adapter_Results is
       Violation_JSON : constant String :=
@@ -348,7 +494,7 @@ procedure Counterweave_Tests is
       Counterweave.Choices.Start_Recording (Tape, 17);
       Drawn := Counterweave.Choices.Draw (Tape, Path);
       declare
-         Source : constant String :=
+         Source     : constant String :=
            "{""format"":""counterweave.case/2"","
            & """pack"":{""name"":""test"",""version"":""1""},"
            & """intent"":{""kind"":""satisfy"",""target"":""unit""},"
@@ -360,10 +506,26 @@ procedure Counterweave_Tests is
            & """compiled_sha256"":""test"","
            & """diversity_seed"":""17""}"
            & "},"
-           & """payload"":{""parameters"":{},""solution"":{}}}";
-         Loaded : Counterweave.Choices.Choice_Tape;
+           & """payload"":{""parameters"":{""b"":1.00,""a"":""\u0061""},"
+           & """solution"":{""nested"":{""z"":100,""y"":-0.0}}}}";
+         Equivalent : constant String :=
+           " { ""payload"" : {"
+           & """solution"":{""nested"":{""y"":0,""z"":1e2}},"
+           & """parameters"":{""a"":""a"",""b"":1e0}},"
+           & """provenance"":{""model"":{""diversity_seed"":""17"","
+           & """compiled_sha256"":""different-diagnostic-hash"","
+           & """model_sha256"":""test"",""minizinc_version"":""test"","
+           & """solver"":""test"",""backend"":""minizinc""},"
+           & """choices"":"
+           & Counterweave.Choices.To_JSON (Tape)
+           & ",""counterweave_version"":""another-diagnostic-version""},"
+           & """intent"":{""target"":""unit"",""kind"":""satisfy""},"
+           & """pack"":{""version"":""1"",""name"":""test""},"
+           & """format"":""counterweave.case/2"" } ";
+         Loaded     : Counterweave.Choices.Choice_Tape;
       begin
          Counterweave.Artifacts.Validate_Case (Source);
+         Counterweave.Artifacts.Validate_Case (Equivalent);
          Loaded := Counterweave.Artifacts.Choices_From_Case (Source);
          declare
             Session : Counterweave.Choices.Replay_Session :=
@@ -373,6 +535,24 @@ procedure Counterweave_Tests is
               (Counterweave.Choices.Draw (Session, Path) = Drawn,
                "validated case restores its choice tape");
             Counterweave.Choices.Finish (Session);
+         end;
+         Check
+           (Counterweave.Artifacts.Case_Replay_SHA256 (Source)
+            = Counterweave.Artifacts.Case_Replay_SHA256 (Equivalent),
+            "semantic case hash ignores JSON and diagnostic spelling");
+         declare
+            Different : String := Equivalent;
+            Position  : constant Natural :=
+              Ada.Strings.Fixed.Index (Different, "1e2");
+         begin
+            Check (Position /= 0, "semantic hash fixture contains its value");
+            if Position /= 0 then
+               Different (Position + 2) := '3';
+               Check
+                 (Counterweave.Artifacts.Case_Replay_SHA256 (Source)
+                  /= Counterweave.Artifacts.Case_Replay_SHA256 (Different),
+                  "semantic case hash retains distinct payload values");
+            end if;
          end;
       end;
    end Test_Artifacts;
@@ -423,7 +603,7 @@ procedure Counterweave_Tests is
 
    procedure Test_Campaign_Replay is
       Original : constant String :=
-        "{""format"":""counterweave.campaign/1"","
+        "{""format"":""counterweave.campaign/2"","
         & """root_seed"":""42"",""maximum_trials"":2,"
         & """status"":""property-violation"",""attempts"":["
         & "{""index"":1,""seed"":""7"",""outcome"":""pass"","
@@ -585,6 +765,7 @@ begin
    Test_Choices;
    Test_JSON;
    Test_Paths;
+   Test_CLI_Path_Safety;
    Test_Adapter_Results;
    Test_Artifacts;
    Test_Run_Classification;

@@ -257,6 +257,22 @@ procedure Counterweave_Main is
          raise Constraint_Error
            with "generate requires --model, --pack, and --output";
       end if;
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path
+              (Ada.Command_Line.Command_Name));
+         Inputs.Append (Counterweave.Artifacts.Executable_Path ("minizinc"));
+         Inputs.Append (To_String (Model_Path));
+         if Length (Base_Data_Path) > 0 then
+            Inputs.Append (To_String (Base_Data_Path));
+         end if;
+         Outputs.Append (To_String (Output_Path));
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "generate");
+      end;
       if not Seed_Was_Set then
          Seed_Value := Entropy_Seed;
       end if;
@@ -426,6 +442,20 @@ procedure Counterweave_Main is
          raise Constraint_Error
            with "execute requires --case, --adapter, and --output";
       end if;
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path
+              (Ada.Command_Line.Command_Name));
+         Inputs.Append (To_String (Case_Path));
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path (To_String (Adapter)));
+         Outputs.Append (To_String (Output_Path));
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "execute");
+      end;
       declare
          Case_Source        : constant String :=
            Counterweave.Strings.Read_File (To_String (Case_Path));
@@ -636,6 +666,26 @@ procedure Counterweave_Main is
              "search requires --model, --pack, --adapter, --case-output, "
              & "--run-output, and --campaign-output";
       end if;
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path
+              (Ada.Command_Line.Command_Name));
+         Inputs.Append (Counterweave.Artifacts.Executable_Path ("minizinc"));
+         Inputs.Append (To_String (Model_Path));
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path (To_String (Adapter)));
+         if Length (Base_Data_Path) > 0 then
+            Inputs.Append (To_String (Base_Data_Path));
+         end if;
+         Outputs.Append (To_String (Case_Output));
+         Outputs.Append (To_String (Run_Output));
+         Outputs.Append (To_String (Campaign_Output));
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "search");
+      end;
       if not Seed_Was_Set then
          Seed_Value := Entropy_Seed;
       end if;
@@ -1045,22 +1095,22 @@ procedure Counterweave_Main is
            with
              "replay-campaign requires --campaign, --case-output, "
              & "--run-output, and --campaign-output";
-      elsif Counterweave.Strings.Same_Path
-              (To_String (Source_Path), To_String (Case_Output))
-        or else Counterweave.Strings.Same_Path
-                  (To_String (Source_Path), To_String (Run_Output))
-        or else Counterweave.Strings.Same_Path
-                  (To_String (Source_Path), To_String (Campaign_Output))
-        or else Counterweave.Strings.Same_Path
-                  (To_String (Case_Output), To_String (Run_Output))
-        or else Counterweave.Strings.Same_Path
-                  (To_String (Case_Output), To_String (Campaign_Output))
-        or else Counterweave.Strings.Same_Path
-                  (To_String (Run_Output), To_String (Campaign_Output))
-      then
-         raise Constraint_Error
-           with "replay outputs must be distinct from their source";
       end if;
+
+      declare
+         Inputs  : Counterweave.Strings.String_Vector;
+         Outputs : Counterweave.Strings.String_Vector;
+      begin
+         Inputs.Append
+           (Counterweave.Artifacts.Executable_Path
+              (Ada.Command_Line.Command_Name));
+         Inputs.Append (To_String (Source_Path));
+         Outputs.Append (To_String (Case_Output));
+         Outputs.Append (To_String (Run_Output));
+         Outputs.Append (To_String (Campaign_Output));
+         Counterweave.Strings.Validate_Output_Paths
+           (Inputs, Outputs, "campaign replay");
+      end;
 
       declare
          Source       : constant String :=

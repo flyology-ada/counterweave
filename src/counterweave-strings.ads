@@ -18,6 +18,9 @@ package Counterweave.Strings is
 
    function Same_Path (Left, Right : String) return Boolean;
 
+   procedure Validate_Output_Paths
+     (Inputs : String_Vector; Outputs : String_Vector; Context : String);
+
    function JSON_String (Value : String) return String;
 
    function Compact_Image (Value : Long_Long_Integer) return String;

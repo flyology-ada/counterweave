@@ -123,8 +123,9 @@ procedure Stale_Handle_Adapter is
    end Operation_Name;
 
 begin
-   if Pack_Name /= "ada-stale-handle" then
-      raise Constraint_Error with "unsupported model pack: " & Pack_Name;
+   if Pack_Name /= "ada-stale-handle" or else Pack_Version /= "1" then
+      raise Constraint_Error
+        with "unsupported model pack: " & Pack_Name & "/" & Pack_Version;
    elsif Counterweave.JSON.Length (Source, Handles) /= Step_Count
      or else Counterweave.JSON.Length (Source, Values) /= Step_Count
      or else Counterweave.JSON.Length (Source, Expectations) /= Step_Count

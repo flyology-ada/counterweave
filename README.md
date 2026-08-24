@@ -234,9 +234,10 @@ bin/counterweave replay-campaign \
 
 Before replay, Counterweave checks the recorded model, data, and adapter hashes.
 Afterward it compares every trial seed, semantic outcome, property, fingerprint,
-and semantic case hash. The flattened MiniZinc hash remains diagnostic because
-equivalent flattening runs can differ byte-for-byte while producing the same
-materialized case.
+and semantic case hash. The semantic hash canonicalizes object order, JSON
+whitespace, string escapes, and exact decimal spelling. The flattened MiniZinc
+hash remains diagnostic because equivalent flattening runs can differ
+byte-for-byte while producing the same materialized case.
 
 ## Ada adapter protocol
 
@@ -287,9 +288,9 @@ stays here.
   complete choice tape, recorded diversity seed, and solver provenance.
 - `counterweave.run/2` separates subprocess outcome from the parsed adapter
   result and binds both to case and adapter hashes.
-- `counterweave.campaign/1` records the complete search configuration and every
-  trial seed, outcome, property, fingerprint, and semantic case hash.
-- `counterweave.reduction/1` records every candidate and the final reduced
+- `counterweave.campaign/2` records the complete search configuration and every
+  trial seed, outcome, property, fingerprint, and canonical semantic case hash.
+- `counterweave.reduction/2` records every candidate and the final reduced
   parameters, case, run, property, and fingerprint.
 
 Exact execution replay needs only a case and adapter. Campaign replay invokes
