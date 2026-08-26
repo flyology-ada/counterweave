@@ -53,8 +53,10 @@ jobs:
       - name: Discover the example bug
         env:
           COUNTERWEAVE_SOLVER: gecode
+          COUNTERWEAVE_SEED: 42
         run: examples/ada_stale_handle/run.sh
       - name: Discover the variable-history idempotency bug
         env:
           COUNTERWEAVE_SOLVER: gecode
+          COUNTERWEAVE_SEED: 42
         run: examples/ada_idempotent_transfer/run.sh
