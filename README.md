@@ -54,10 +54,12 @@ The user or library maintainer owns two pack-specific pieces:
    data and asks for one completion.
 2. An Ada adapter links the exact code under test, validates its pack name and
    version, iterates every materialized step, compares actual returns or
-   exceptions with the modeled outcomes, and emits
-   `counterweave.adapter-result/1`. It may attach a `counterweave.trace/1`
-   explanation that aligns each generated action with the model expectation,
-   Ada observation, comparison status, and originating model symbols.
+   exceptions with the modeled outcomes through Flyology TLA+'s replay
+   adapter, and emits `counterweave.adapter-result/2`. The result nests a
+   strict `flyology.tla.result/1` verdict and its canonical
+   `flyology.tla.trace/2`, aligning each generated action with the model
+   expectation and originating model symbols. Pack-owned observations remain
+   diagnostic because result/1 does not retain observed outcome/state values.
 
 Counterweave owns choice derivation, MiniZinc execution, process isolation,
 classification, artifacts, campaign replay, reduction, and terminal UI. A new
@@ -72,7 +74,8 @@ so without special dispatch in the engine.
 - the CP-SAT MiniZinc backend for the default examples, or another backend
   selected with `--solver`.
 
-Add Flyology's Alire index before resolving the `flyology_tui` dependency:
+Add Flyology's Alire index before resolving the exact development dependencies
+on `flyology_tla` and `flyology_tui`:
 
 ```sh
 alr index --add=git+https://github.com/flyology-ada/alire-index.git --name=flyology
@@ -157,13 +160,23 @@ The important evidence looks like this:
   "adapter_result": {
     "property": "released-handles-stay-stale",
     "fingerprint": "stale-read-accepted",
+    "conformance": {
+      "format": "flyology.tla.result/1",
+      "verdict": "diverged",
+      "trace_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "compared_steps": 9,
+      "failure": {
+        "step": 9,
+        "property": "released-handles-stay-stale",
+        "fingerprint": "stale-read-accepted",
+        "detail": "a released handle read the replacement value"
+      }
+    },
     "observations": {
       "scenario": 23,
-      "expected_stale": true,
-      "stale_read_accepted": true,
+      "observed_value": 101,
       "old_generation": 1,
-      "new_generation": 1,
-      "modeled_new_generation": 4
+      "new_generation": 1
     }
   }
 }
@@ -292,24 +305,56 @@ result to standard output:
 
 ```json
 {
-  "format": "counterweave.adapter-result/1",
+  "format": "counterweave.adapter-result/2",
   "pack": {"name": "ada-idempotent-transfer", "version": "1"},
   "verdict": "property-violation",
   "property": "transfers-are-idempotent",
   "fingerprint": "duplicate-transfer-not-ignored",
   "observations": {},
+  "conformance": {
+    "format": "flyology.tla.result/1",
+    "verdict": "diverged",
+    "trace_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "compared_steps": 2,
+    "failure": {
+      "step": 2,
+      "property": "transfers-are-idempotent",
+      "fingerprint": "duplicate-transfer-not-ignored",
+      "detail": "a duplicate transfer changed the balances"
+    }
+  },
   "trace": {
-    "format": "counterweave.trace/1",
-    "summary": "2 accounts | balance 40 | 5 steps",
-    "basis": "a repeated transaction changes no balance after its first application",
+    "format": "flyology.tla.trace/2",
+    "model": {
+      "module": "TransferLedger",
+      "configuration": "ada-idempotent-transfer/1",
+      "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "configuration_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "toolchain": "minizinc 2.9.7; solver cp-sat"
+    },
+    "initial": {"state": {"balances": [40, 40]}},
     "steps": [
       {
+        "index": 1,
+        "action": "TransferLedger!Transfer",
+        "role": "first-transfer",
+        "input": {"transaction": 1, "source": 1, "destination": 2, "amount": 14},
+        "expected": {
+          "outcome": {"status": "applied"},
+          "state": {"balances": [26, 54]}
+        },
+        "model_source": "TransferLedger!Transfer"
+      },
+      {
+        "index": 2,
+        "action": "TransferLedger!Transfer",
         "role": "duplicate-transfer-retry",
-        "action": "tx 1: a1->a2, 14",
-        "model": "a1=26, a2=54",
-        "observed": "a1=12, a2=68",
-        "status": "violation",
-        "model_source": "step_is_retry[5], balance_after[5, *]"
+        "input": {"transaction": 1, "source": 1, "destination": 2, "amount": 14},
+        "expected": {
+          "outcome": {"status": "ignored"},
+          "state": {"balances": [26, 54]}
+        },
+        "model_source": "TransferLedger!Transfer"
       }
     ]
   }
@@ -321,19 +366,24 @@ have a nonempty stable fingerprint; the other verdicts use `null`. Pack identity
 must match the case. A nonzero adapter exit is always an infrastructure error,
 even if the process printed plausible JSON, so a crash cannot be reported as a
 bug. `counterweave execute` itself returns unsuccessfully for a semantic
-violation so shell scripts can stop, while `counterweave.run/2` preserves the
+violation so shell scripts can stop, while `counterweave.run/3` preserves the
 successful adapter process outcome separately from the semantic verdict.
 
-The optional trace is an explanatory contract, not a second oracle. Its steps
-must be in execution order and use `match`, `divergence`, or `violation`.
-`model` and `observed` describe the system state after the transition, rather
-than restating that a call returned. Counterweave retains the complete trace in
-the run artifact. The terminal view extracts the causal path: one establishing
-transition before the first mismatch, then every transition through the first
-property violation. Verdict classification and shrink retention still depend
-only on the semantic adapter result and stable property/fingerprint identity.
-This keeps pack-owned model vocabulary out of the generic engine while making
-a TLA+-style failure path available to users.
+The shared trace is the replay input, not a second verdict. A dynamic Flyology
+TLA+ adapter projects each MiniZinc-authored step into a deterministic semantic
+input, executes the real Ada operation, and compares the modeled and observed
+outcome and state. The shared replay result supplies the compared-step count,
+failure step, property, stable fingerprint, and detail. Counterweave validates
+that result strictly and binds it to the exact trace SHA-256 before accepting
+the pack's outer verdict.
+
+The checked-in packs use Flyology TLA+'s dynamic adapter because MiniZinc, not
+SANY, owns their typed step schemas. `source_sha256` is the Counterweave model
+SHA-256 and `configuration_sha256` is the generated data SHA-256. The complete
+canonical trace remains in the run artifact. The terminal view uses the shared
+failure step to show one establishing transition before the divergence and all
+transitions through the failed property. Shrink retention continues to use the
+same property and failure fingerprint.
 
 Counterweave captures standard output and error into the run artifact and keeps
 completed, adapter-error, timeout, cancellation, output-limit, spawn, and
@@ -350,16 +400,16 @@ stays here.
 
 ## Durable artifacts
 
-- `counterweave.case/2` contains the opaque pack parameters and solution,
+- `counterweave.case/3` contains the opaque pack parameters and solution,
   complete choice tape, recorded diversity seed, and solver provenance.
-- `counterweave.run/2` separates subprocess outcome from the parsed adapter
-  result, retains an optional `counterweave.trace/1`, and binds both to case and
-  adapter hashes.
+- `counterweave.run/3` separates subprocess outcome from the parsed adapter
+  result, retains the bound `flyology.tla.result/1` and
+  `flyology.tla.trace/2`, and binds them to case and adapter hashes.
 - `counterweave.campaign/3` records the complete search configuration and every
   trial seed, outcome, property, fingerprint, and canonical semantic case hash.
-- `counterweave.reduction/3` records every choice-tape mutation, strategy,
+- `counterweave.reduction/4` records every choice-tape mutation, strategy,
   outcome, normalized final tape, parameters, case, run, property,
-  fingerprint, and the original and final explanatory traces.
+  fingerprint, and the original and final replay results and traces.
 
 Exact execution replay needs only a case and adapter. Campaign replay invokes
 the model again and therefore verifies semantic case identity rather than
@@ -375,12 +425,13 @@ persistent campaign dashboard. Reduction has its own rounded panel with a
 high-color candidate-budget bar, accepted-mutation count, current tape size,
 and last strategy. Shrink activity is kept above the counterexample, while a
 non-sortable Flyology TUI table preserves the causal transition order and
-aligns modeled state with Ada state. Setup calls outside that failure path stay
-in the durable trace instead of crowding the live view. Text markers identify
-matches, the first divergence, and the property violation without relying on
-color: `✓` means the model and Ada state agree after the transition, `≠` marks
-their first difference, and `✕` marks the transition that violates the
-property. Search leaves a bounded styled report in the normal terminal.
+shows the modeled outcome and state through the shared failure step. Setup calls
+outside that failure path stay in the durable trace instead of crowding the live
+view. Text markers do not rely on color: `✓` identifies steps compared before
+the divergence and `✕` identifies the shared result's failure step. The
+pack-owned observations remain diagnostic evidence; they cannot replace or
+contradict the shared verdict, property, or fingerprint. Search leaves a
+bounded styled report in the normal terminal.
 Reduction keeps its trace-first completed view in the full-terminal TUI until
 Enter, Escape, `q`, or Ctrl-C restores the shell. Redirected commands, CI, and
 pipelines retain stable plain output. The TUI is only a
@@ -388,8 +439,8 @@ presentation layer: choices, solver inputs, adapter arguments, exit status,
 and artifacts are identical in either mode. Press `q` or Ctrl-C to cancel the
 active solver or adapter; cancellation is recorded separately from a timeout.
 
-Case provenance records the source model hash, optional base-data hash, recorded
-diversity seed, and a hash of the solver-specific flattened instance. Run
+Case provenance records the source model hash, complete generated-data hash,
+recorded diversity seed, and a hash of the solver-specific flattened instance. Run
 provenance records the Counterweave version, adapter executable hash, and
 complete effective argument list. Campaign and reduction artifacts retain the
 evidence chain above them.

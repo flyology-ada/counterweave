@@ -412,12 +412,8 @@ procedure Counterweave_Main is
                    (Counterweave.Hashes.SHA256_File (To_String (Model_Path))),
                Compiled_SHA256  => Solution.Compiled_SHA256,
                Data_SHA256      =>
-                 (if Length (Base_Data_Path) = 0
-                  then Null_Unbounded_String
-                  else
-                    To_Unbounded_String
-                      (Counterweave.Hashes.SHA256_File
-                         (To_String (Base_Data_Path)))),
+                 To_Unbounded_String
+                   (Counterweave.Hashes.SHA256_File (Data_Path)),
                Diversity_Seed   => Diversity_Seed,
                Solver_Seed      => Solution.Applied_Seed,
                Seed_Applied     => Solution.Seed_Applied,
@@ -1072,8 +1068,7 @@ procedure Counterweave_Main is
                      & To_String (Final_Result.Failure_Fingerprint));
                   Ada.Text_IO.Put_Line
                     ("failing trial seed: "
-                     & Counterweave.Strings.Compact_Image
-                         (Final_Result.Seed));
+                     & Counterweave.Strings.Compact_Image (Final_Result.Seed));
                   Ada.Text_IO.Put_Line
                     ("replay: "
                      & Ada.Command_Line.Command_Name

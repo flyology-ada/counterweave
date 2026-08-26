@@ -57,16 +57,18 @@ commands remain authoritative.
   materialized steps deterministically and compare modeled outcomes with actual
   returns or exceptions; it must not replace generated steps with handwritten
   calls.
-- An adapter may attach `counterweave.trace/1` to its semantic result. Keep the
-  trace in execution order and align every action with its model expectation,
-  observed result, `match`/`divergence`/`violation` status, and stable model
-  source. The trace is explanatory and must not become a second verdict or
-  shrink-retention oracle.
-- Trace model and observed values describe state after the transition; do not
-  fill both columns with equivalent call-result words. The live failure path
-  begins with one matched transition establishing relevant state before the
-  first mismatch and ends at the first property violation. The durable artifact
-  retains setup and later consequences outside that causal slice.
+- An adapter emits `counterweave.adapter-result/2` with a strict shared
+  `flyology.tla.result/1` and its SHA-bound canonical
+  `flyology.tla.trace/2`. Keep the trace in execution order and align every
+  action with its modeled outcome, post-transition state, and stable model
+  source. The shared replay result is the semantic verdict and shrink-retention
+  oracle; pack-owned observations are diagnostic only and must not contradict
+  or replace its verdict, property, or fingerprint.
+- The live failure path begins with one compared transition establishing
+  relevant state before the shared result's failure step. The durable artifact
+  retains the complete modeled trace and shared replay result. Result version 1
+  does not preserve observed outcome/state payloads, so do not reconstruct them
+  from diagnostic fields as a second semantic contract.
 - Keep generation, execution, and judgment separate. Adapters translate and
   observe; they should not duplicate an external reference oracle.
 - Search derives every trial from an indexed campaign fork, runs one MiniZinc
@@ -77,9 +79,10 @@ commands remain authoritative.
   explicit seed override for reproducible checks. Never draw fresh entropy when
   replaying a choice tape or campaign.
 - A normal adapter process exits successfully and emits
-  `counterweave.adapter-result/1`. Nonzero adapter exit is always
-  infrastructure failure. Preserve process outcome separately from `pass`,
-  `property-violation`, and `invalid-case`.
+  `counterweave.adapter-result/2`. Nonzero adapter exit, shared
+  `adapter-error`, and shared `invalid-trace` are infrastructure failures.
+  Preserve process outcome separately from `pass`, `property-violation`, and
+  `invalid-case`.
 - Campaign artifacts record every indexed seed and semantic case identity.
   Campaign replay checks model, data, and adapter provenance before execution
   and verifies every attempt afterward.
@@ -108,7 +111,7 @@ commands remain authoritative.
   runtime unless an implemented backend requires one and the boundary is
   independently justified.
 - Serialize durable formats with explicit identifiers such as
-  `counterweave.case/2`; reject unknown versions rather than guessing.
+  `counterweave.case/3`; reject unknown versions rather than guessing.
 - Parse JSON structurally with scoped member access. Reject malformed values,
   duplicate members, trailing data, and type mismatches before execution.
 - Use stable hashing or derivation algorithms where persisted behavior depends
@@ -118,8 +121,8 @@ commands remain authoritative.
 - Flyology TUI is a presentation layer selected only when standard input and
   output are usable terminals. Plain output remains authoritative for CI,
   redirection, and automation; UI selection must not affect artifacts.
-- Resolve `flyology_tui` through Flyology's Alire index. Do not bypass index
-  metadata with a direct manifest pin.
+- Resolve `flyology_tla` and `flyology_tui` through Flyology's Alire index. Do
+  not bypass index metadata with a direct path or URL pin.
 - TUI quit keys request bounded child cancellation and wait for owned cleanup
   before restoring the terminal; do not abandon a solver or adapter process.
 - Interactive reduction completion remains in the full-terminal Flyology TUI

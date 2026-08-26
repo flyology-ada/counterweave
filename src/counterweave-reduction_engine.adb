@@ -11,7 +11,7 @@ with Counterweave.Hashes;
 with Counterweave.JSON;
 with Counterweave.Processes;
 with Counterweave.Strings;
-with Counterweave.Traces;
+with Flyology_TLA.Traces;
 with GNAT.OS_Lib;
 with Interfaces;
 
@@ -87,80 +87,109 @@ package body Counterweave.Reduction_Engine is
              (Directory, "counterweave-reduction-choices-" & PID & ".json");
       end Temporary_Choice_Path;
 
-      Model                : constant String :=
+      Model                      : constant String :=
         String_Member (Campaign_Source, Configuration, "model");
-      Data_Node            : constant Counterweave.JSON.Value :=
+      Data_Node                  : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member (Campaign_Source, Configuration, "data");
-      Solver               : constant String :=
+      Solver                     : constant String :=
         String_Member (Campaign_Source, Configuration, "solver");
-      Pack                 : constant String :=
+      Pack                       : constant String :=
         String_Member (Campaign_Source, Configuration, "pack");
-      Pack_Version         : constant String :=
+      Pack_Version               : constant String :=
         String_Member (Campaign_Source, Configuration, "pack_version");
-      Intent               : constant String :=
+      Intent                     : constant String :=
         String_Member (Campaign_Source, Configuration, "intent");
-      Target_Name          : constant String :=
+      Target_Name                : constant String :=
         String_Member (Campaign_Source, Configuration, "target");
-      Adapter              : constant String :=
+      Adapter                    : constant String :=
         String_Member (Campaign_Source, Configuration, "adapter");
-      Retained_Case_Path   : constant String :=
+      Retained_Case_Path         : constant String :=
         String_Member (Campaign_Source, Configuration, "case_output");
-      Retained_Run_Path    : constant String :=
+      Retained_Run_Path          : constant String :=
         String_Member (Campaign_Source, Configuration, "run_output");
-      Solver_Timeout       : constant Positive :=
+      Solver_Timeout             : constant Positive :=
         Integer_Member (Configuration, "solver_timeout_ms");
-      Adapter_Timeout      : constant Positive :=
+      Adapter_Timeout            : constant Positive :=
         Integer_Member (Configuration, "adapter_timeout_ms");
-      Choice_Path          : constant String := Temporary_Choice_Path;
-      Retained_Case_Source : constant String :=
+      Choice_Path                : constant String := Temporary_Choice_Path;
+      Retained_Case_Source       : constant String :=
         Counterweave.Strings.Read_File (Retained_Case_Path);
-      Retained_Root        : constant Counterweave.JSON.Value :=
+      Retained_Root              : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Parse (Retained_Case_Source);
-      Retained_Payload     : constant Counterweave.JSON.Value :=
+      Retained_Payload           : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Root, "payload");
-      Retained_Provenance  : constant Counterweave.JSON.Value :=
+      Retained_Provenance        : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Root, "provenance");
-      Retained_Model       : constant Counterweave.JSON.Value :=
+      Retained_Model             : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Provenance, "model");
-      Original_Parameters  : constant Counterweave.JSON.Value :=
+      Original_Parameters        : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Member
           (Retained_Case_Source, Retained_Payload, "parameters");
-      Original_Tape        : constant Counterweave.Choices.Choice_Tape :=
+      Original_Tape              : constant Counterweave.Choices.Choice_Tape :=
         Counterweave.Artifacts.Choices_From_Case (Retained_Case_Source);
-      Reduced_Tape         : Counterweave.Choices.Choice_Tape;
-      Failure_Seed         : Unbounded_String;
-      Failure_Property     : Unbounded_String;
-      Failure_Fingerprint  : Unbounded_String;
-      Failure_Case_Hash    : Unbounded_String;
-      Draw_Arguments       : Counterweave.Strings.String_Vector;
-      Adapter_Arguments    : Counterweave.Strings.String_Vector;
-      Attempts_JSON        : Unbounded_String := To_Unbounded_String ("[");
-      First_Attempt        : Boolean := True;
-      Reduction_Attempts   : Natural := 0;
-      Accepted_Attempts    : Natural := 0;
-      Last_Update          : Counterweave.Reducers.Reduction_Update;
-      Original_Repro       : Unbounded_String;
-      Original_Trace       : Unbounded_String;
-      Best_Repro           : Unbounded_String;
-      Best_Trace           : Unbounded_String;
-      Last_Evaluated_Repro : Unbounded_String;
-      Last_Evaluated_Trace : Unbounded_String;
-      Last_Candidate_Repro : Unbounded_String;
-      Last_Candidate_Trace : Unbounded_String;
-      Final_Trace          : Unbounded_String;
-      Stop_Reason          : Counterweave.Choices.Shrink_Stop_Reason :=
+      Reduced_Tape               : Counterweave.Choices.Choice_Tape;
+      Failure_Seed               : Unbounded_String;
+      Failure_Property           : Unbounded_String;
+      Failure_Fingerprint        : Unbounded_String;
+      Failure_Case_Hash          : Unbounded_String;
+      Draw_Arguments             : Counterweave.Strings.String_Vector;
+      Adapter_Arguments          : Counterweave.Strings.String_Vector;
+      Attempts_JSON              : Unbounded_String :=
+        To_Unbounded_String ("[");
+      First_Attempt              : Boolean := True;
+      Reduction_Attempts         : Natural := 0;
+      Accepted_Attempts          : Natural := 0;
+      Last_Update                : Counterweave.Reducers.Reduction_Update;
+      Original_Repro             : Unbounded_String;
+      Original_Trace             : Unbounded_String;
+      Original_Conformance       : Unbounded_String;
+      Best_Repro                 : Unbounded_String;
+      Best_Trace                 : Unbounded_String;
+      Best_Conformance           : Unbounded_String;
+      Last_Evaluated_Repro       : Unbounded_String;
+      Last_Evaluated_Trace       : Unbounded_String;
+      Last_Evaluated_Conformance : Unbounded_String;
+      Last_Candidate_Repro       : Unbounded_String;
+      Last_Candidate_Trace       : Unbounded_String;
+      Last_Candidate_Conformance : Unbounded_String;
+      Final_Trace                : Unbounded_String;
+      Final_Conformance          : Unbounded_String;
+      Stop_Reason                : Counterweave.Choices.Shrink_Stop_Reason :=
         Counterweave.Choices.Fixed_Point;
 
       function Trace_Summary
-        (Source : Unbounded_String) return Unbounded_String is
+        (Source : Unbounded_String) return Unbounded_String
+      is
+         --  Match the adapter-result boundary used for retained evidence.
+         Limits : constant Flyology_TLA.Traces.Load_Limits :=
+           (Maximum_File_Bytes   => 1_048_576,
+            Maximum_Steps        => 4_096,
+            Maximum_JSON_Depth   => 64,
+            Maximum_Object_Names => 10_000,
+            Maximum_Name_Bytes   => 4_096,
+            Maximum_String_Bytes => 100_000,
+            Maximum_Value_Bytes  => 1_048_576);
       begin
          if Length (Source) = 0 then
             return Null_Unbounded_String;
          end if;
-         return Counterweave.Traces.Parse (To_String (Source)).Summary;
+         declare
+            Trace : constant Flyology_TLA.Traces.Trace :=
+              Flyology_TLA.Traces.Parse (To_String (Source), Limits);
+         begin
+            return
+              To_Unbounded_String
+                (To_String (Trace.Model.Module_Name)
+                 & " / "
+                 & To_String (Trace.Model.Configuration)
+                 & " | "
+                 & Counterweave.Strings.Compact_Image
+                     (Long_Long_Integer (Trace.Steps.Length))
+                 & " modeled steps");
+         end;
       end Trace_Summary;
 
       function Short_Hash (Value : String) return String
@@ -284,15 +313,18 @@ package body Counterweave.Reduction_Engine is
          Result    : Evaluation)
       is
          Update : constant Counterweave.Reducers.Reduction_Update :=
-           (Attempt             => Reduction_Attempts,
-            Maximum_Attempts    => Maximum_Attempts,
-            Accepted            => Accepted_Attempts,
-            Current_Forks       => Counterweave.Choices.Fork_Count (Current),
-            Current_Values      => Counterweave.Choices.Value_Count (Current),
-            Candidate_Forks     => Counterweave.Choices.Fork_Count (Candidate),
-            Candidate_Values    =>
+           (Attempt                   => Reduction_Attempts,
+            Maximum_Attempts          => Maximum_Attempts,
+            Accepted                  => Accepted_Attempts,
+            Current_Forks             =>
+              Counterweave.Choices.Fork_Count (Current),
+            Current_Values            =>
+              Counterweave.Choices.Value_Count (Current),
+            Candidate_Forks           =>
+              Counterweave.Choices.Fork_Count (Candidate),
+            Candidate_Values          =>
               Counterweave.Choices.Value_Count (Candidate),
-            Outcome             =>
+            Outcome                   =>
               (case Result.Outcome is
                  when Preserved            => Counterweave.Reducers.Preserved,
                  when Different_Result     =>
@@ -301,22 +333,25 @@ package body Counterweave.Reduction_Engine is
                    Counterweave.Reducers.Invalid_Candidate,
                  when Infrastructure_Error =>
                    Counterweave.Reducers.Infrastructure_Error),
-            Strategy            =>
+            Strategy                  =>
               To_Unbounded_String (Counterweave.Choices.Image (Strategy)),
-            Location            => To_Unbounded_String (Location),
-            Detail              => Result.Detail,
-            Pack_Label          => Pack_Label,
-            Model_Label         => Model_Label,
-            Property_Name       => Failure_Property,
-            Failure_Fingerprint => Failure_Fingerprint,
-            Original_Repro      => Original_Repro,
-            Current_Repro       => Best_Repro,
-            Original_Trace_JSON => Original_Trace,
-            Current_Trace_JSON  => Best_Trace,
-            Retained            => False);
+            Location                  => To_Unbounded_String (Location),
+            Detail                    => Result.Detail,
+            Pack_Label                => Pack_Label,
+            Model_Label               => Model_Label,
+            Property_Name             => Failure_Property,
+            Failure_Fingerprint       => Failure_Fingerprint,
+            Original_Repro            => Original_Repro,
+            Current_Repro             => Best_Repro,
+            Original_Trace_JSON       => Original_Trace,
+            Current_Trace_JSON        => Best_Trace,
+            Original_Conformance_JSON => Original_Conformance,
+            Current_Conformance_JSON  => Best_Conformance,
+            Retained                  => False);
       begin
          Last_Candidate_Repro := Last_Evaluated_Repro;
          Last_Candidate_Trace := Last_Evaluated_Trace;
+         Last_Candidate_Conformance := Last_Evaluated_Conformance;
          Last_Update := Update;
          if Progress /= null then
             Progress (Update);
@@ -330,6 +365,7 @@ package body Counterweave.Reduction_Engine is
       begin
          Last_Evaluated_Repro := Null_Unbounded_String;
          Last_Evaluated_Trace := Null_Unbounded_String;
+         Last_Evaluated_Conformance := Null_Unbounded_String;
          if Ada.Directories.Exists (Case_Output) then
             Ada.Directories.Delete_File (Case_Output);
          end if;
@@ -473,6 +509,7 @@ package body Counterweave.Reduction_Engine is
             begin
                if Counterweave.Adapter_Results.Has_Trace (Protocol) then
                   Last_Evaluated_Trace := Protocol.Trace_JSON;
+                  Last_Evaluated_Conformance := Protocol.Conformance_JSON;
                   Last_Evaluated_Repro := Trace_Summary (Last_Evaluated_Trace);
                end if;
                if Protocol.Verdict
@@ -532,11 +569,13 @@ package body Counterweave.Reduction_Engine is
          Accepted_Attempts := Accepted_Attempts + 1;
          Best_Repro := Last_Candidate_Repro;
          Best_Trace := Last_Candidate_Trace;
+         Best_Conformance := Last_Candidate_Conformance;
          Last_Update.Accepted := Accepted_Attempts;
          Last_Update.Current_Forks := Last_Update.Candidate_Forks;
          Last_Update.Current_Values := Last_Update.Candidate_Values;
          Last_Update.Current_Repro := Best_Repro;
          Last_Update.Current_Trace_JSON := Best_Trace;
+         Last_Update.Current_Conformance_JSON := Best_Conformance;
          Last_Update.Retained := True;
          if Progress /= null then
             Progress (Last_Update);
@@ -699,8 +738,10 @@ package body Counterweave.Reduction_Engine is
          end if;
          Original_Repro := Last_Evaluated_Repro;
          Original_Trace := Last_Evaluated_Trace;
+         Original_Conformance := Last_Evaluated_Conformance;
          Best_Repro := Original_Repro;
          Best_Trace := Original_Trace;
+         Best_Conformance := Original_Conformance;
          Last_Update.Maximum_Attempts := Maximum_Attempts;
          Last_Update.Current_Forks :=
            Counterweave.Choices.Fork_Count (Original_Tape);
@@ -717,6 +758,8 @@ package body Counterweave.Reduction_Engine is
          Last_Update.Current_Repro := Best_Repro;
          Last_Update.Original_Trace_JSON := Original_Trace;
          Last_Update.Current_Trace_JSON := Best_Trace;
+         Last_Update.Original_Conformance_JSON := Original_Conformance;
+         Last_Update.Current_Conformance_JSON := Best_Conformance;
          if Progress /= null then
             Progress (Last_Update);
          end if;
@@ -746,13 +789,14 @@ package body Counterweave.Reduction_Engine is
             end if;
          end if;
          Final_Trace := Last_Evaluated_Trace;
+         Final_Conformance := Last_Evaluated_Conformance;
       end;
       Append (Attempts_JSON, "]");
       Counterweave.Strings.Write_File_Atomically
         (Report_Output,
          "{"
          & ASCII.LF
-         & "  ""format"": ""counterweave.reduction/3"","
+         & "  ""format"": ""counterweave.reduction/4"","
          & ASCII.LF
          & "  ""campaign_sha256"": "
          & Counterweave.Strings.JSON_String
@@ -776,6 +820,12 @@ package body Counterweave.Reduction_Engine is
          & (if Length (Original_Trace) = 0
             then "null"
             else To_String (Original_Trace))
+         & ","
+         & ASCII.LF
+         & "  ""original_conformance"": "
+         & (if Length (Original_Conformance) = 0
+            then "null"
+            else To_String (Original_Conformance))
          & ","
          & ASCII.LF
          & "  ""original_case_replay_sha256"": "
@@ -821,6 +871,12 @@ package body Counterweave.Reduction_Engine is
          & (if Length (Final_Trace) = 0
             then "null"
             else To_String (Final_Trace))
+         & ","
+         & ASCII.LF
+         & "  ""final_conformance"": "
+         & (if Length (Final_Conformance) = 0
+            then "null"
+            else To_String (Final_Conformance))
          & ","
          & ASCII.LF
          & "  ""final_choices_sha256"": "

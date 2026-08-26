@@ -3,10 +3,10 @@ with Ada.Environment_Variables;
 with Ada.Strings.Unbounded;
 with Ada.Strings.Wide_Wide_Unbounded;
 with Ada.Text_IO;
+with Counterweave.Adapter_Results;
 with Counterweave.JSON;
 with Counterweave.Strings;
 with Counterweave.Trace_Views;
-with Counterweave.Traces;
 with Flyology_TUI.Color_Profiles;
 with Flyology_TUI.Components.Indicators;
 with Flyology_TUI.Layouts;
@@ -74,15 +74,23 @@ package body Counterweave.Terminal_Reports is
       end;
    end Brief;
 
-   function Trace_From_Run (Path : String) return Unbounded_String is
+   type Conformance_Evidence is record
+      Trace  : Unbounded_String;
+      Result : Unbounded_String;
+   end record;
+
+   function Evidence_From_Run (Path : String) return Conformance_Evidence is
+      Evidence : Conformance_Evidence;
    begin
       if not Ada.Directories.Exists (Path) then
-         return Null_Unbounded_String;
+         return Evidence;
       end if;
-      return
-        Counterweave.Traces.Trace_JSON_From_Run
-          (Counterweave.Strings.Read_File (Path));
-   end Trace_From_Run;
+      Counterweave.Adapter_Results.Evidence_From_Run
+        (Counterweave.Strings.Read_File (Path),
+         Evidence.Trace,
+         Evidence.Result);
+      return Evidence;
+   end Evidence_From_Run;
 
    function Case_Model_Label (Path : String) return String is
       Source     : constant String := Counterweave.Strings.Read_File (Path);
@@ -128,17 +136,17 @@ package body Counterweave.Terminal_Reports is
    is
       package Wide_Text renames Ada.Strings.Wide_Wide_Unbounded;
 
-      Theme           : constant Flyology_TUI.Themes.Theme :=
+      Theme             : constant Flyology_TUI.Themes.Theme :=
         Flyology_TUI.Themes.Charm;
-      Found           : constant Boolean :=
+      Found             : constant Boolean :=
         Result.Outcome = Counterweave.Campaign_UI.Found;
-      Badge_Label     : constant Wide_Wide_String :=
+      Badge_Label       : constant Wide_Wide_String :=
         (case Result.Outcome is
            when Counterweave.Campaign_UI.Found     => "BUG FOUND",
            when Counterweave.Campaign_UI.Passed    => "NO COUNTEREXAMPLE",
            when Counterweave.Campaign_UI.Cancelled => "CANCELLED",
            when Counterweave.Campaign_UI.Errored   => "ERROR");
-      Badge_Tone      : constant Flyology_TUI.Components.Indicators.Tone :=
+      Badge_Tone        : constant Flyology_TUI.Components.Indicators.Tone :=
         (case Result.Outcome is
            when Counterweave.Campaign_UI.Found  =>
              Flyology_TUI.Components.Indicators.Success_Tone,
@@ -146,13 +154,13 @@ package body Counterweave.Terminal_Reports is
              Flyology_TUI.Components.Indicators.Warning_Tone,
            when others                          =>
              Flyology_TUI.Components.Indicators.Error_Tone);
-      Verdict         : constant String :=
+      Verdict           : constant String :=
         (case Result.Outcome is
            when Counterweave.Campaign_UI.Found     => "PROPERTY VIOLATION",
            when Counterweave.Campaign_UI.Passed    => "BOUND EXHAUSTED",
            when Counterweave.Campaign_UI.Cancelled => "SEARCH CANCELLED",
            when Counterweave.Campaign_UI.Errored   => "INFRASTRUCTURE ERROR");
-      Heading         : constant Flyology_TUI.Surfaces.Surface :=
+      Heading           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Horizontally
           (Flyology_TUI.Surfaces.From_Text
              ("COUNTERWEAVE / SEARCH REPORT",
@@ -160,10 +168,10 @@ package body Counterweave.Terminal_Reports is
            Flyology_TUI.Components.Indicators.Badge
              (Badge_Label, Badge_Tone, Theme),
            Gap => 2);
-      Verdict_Row     : constant Flyology_TUI.Surfaces.Surface :=
+      Verdict_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("verdict", Wide (Verdict), Content_Width, Theme);
-      Trial_Row       : constant Flyology_TUI.Surfaces.Surface :=
+      Trial_Row         : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("constraint-valid trials",
            Wide (Image (Attempts) & " / " & Image (Maximum_Attempts)),
@@ -175,7 +183,7 @@ package body Counterweave.Terminal_Reports is
            Wide (Counterweave.Strings.Compact_Image (Root_Seed)),
            Content_Width,
            Theme);
-      Trial_Seed_Row  : constant Flyology_TUI.Surfaces.Surface :=
+      Trial_Seed_Row    : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("failing trial seed",
            Wide
@@ -184,7 +192,7 @@ package body Counterweave.Terminal_Reports is
               else Counterweave.Strings.Compact_Image (Result.Seed)),
            Content_Width,
            Theme);
-      Check_Row       : constant Flyology_TUI.Surfaces.Surface :=
+      Check_Row         : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("check",
            Wide
@@ -196,7 +204,7 @@ package body Counterweave.Terminal_Reports is
                 & To_String (Result.Failure_Fingerprint)),
            Content_Width,
            Theme);
-      Status_Row      : constant Flyology_TUI.Surfaces.Surface :=
+      Status_Row        : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ((if Found then "model" else "detail"),
            Wide
@@ -205,28 +213,28 @@ package body Counterweave.Terminal_Reports is
               else Brief (Result.Detail)),
            Content_Width,
            Theme);
-      Metrics         : constant Flyology_TUI.Surfaces.Surface :=
+      Metrics           : constant Flyology_TUI.Surfaces.Surface :=
         Stack
           (Verdict_Row,
            Stack
              (Campaign_Seed_Row,
               Stack
                 (Trial_Row,
-                 Stack
-                   (Trial_Seed_Row,
-                    Stack (Check_Row, Status_Row)))));
-      Trace_JSON      : constant Unbounded_String :=
-        (if Found then Trace_From_Run (Run_Path) else Null_Unbounded_String);
-      Trace_Surface   : constant Flyology_TUI.Surfaces.Surface :=
+                 Stack (Trial_Seed_Row, Stack (Check_Row, Status_Row)))));
+      Run_Evidence      : constant Conformance_Evidence :=
+        (if Found then Evidence_From_Run (Run_Path) else (others => <>));
+      Trace_JSON        : constant Unbounded_String := Run_Evidence.Trace;
+      Trace_Surface     : constant Flyology_TUI.Surfaces.Surface :=
         (if Length (Trace_JSON) = 0
          then Flyology_TUI.Surfaces.Create (Content_Width, 0)
          else
            Counterweave.Trace_Views.Render
-             (Source       => To_String (Trace_JSON),
-              Width        => Content_Width,
-              Theme        => Theme,
-              Maximum_Rows => 4,
-              Compact      => True));
+             (Source             => To_String (Trace_JSON),
+              Conformance_Source => To_String (Run_Evidence.Result),
+              Width              => Content_Width,
+              Theme              => Theme,
+              Maximum_Rows       => 4,
+              Compact            => True));
 
       function Evidence return Flyology_TUI.Surfaces.Surface is
       begin
@@ -244,12 +252,11 @@ package body Counterweave.Terminal_Reports is
               Flyology_TUI.Components.Indicators.Key_Value
                 ("run", Wide (Run_Path), Content_Width, Theme);
          begin
-            return
-              Stack (Campaign_Row, Stack (Case_Row, Run_Row));
+            return Stack (Campaign_Row, Stack (Case_Row, Run_Row));
          end;
       end Evidence;
 
-      Footer        : constant Flyology_TUI.Surfaces.Surface :=
+      Footer   : constant Flyology_TUI.Surfaces.Surface :=
         (if Found
          then
            Flyology_TUI.Components.Indicators.Status_Line
@@ -258,8 +265,7 @@ package body Counterweave.Terminal_Reports is
                   Flyology_TUI.Components.Indicators.High,
                   Flyology_TUI.Components.Indicators.Success_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
-                 (Counterweave.Trace_Views.Diverged_Mark
-                  & " FIRST DIFFERENCE",
+                 (Counterweave.Trace_Views.Diverged_Mark & " FIRST DIFFERENCE",
                   Flyology_TUI.Components.Indicators.Normal,
                   Flyology_TUI.Components.Indicators.Warning_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
@@ -280,23 +286,21 @@ package body Counterweave.Terminal_Reports is
                  ("ADA ADAPTER")],
               Content_Width,
               Theme));
-      Content       : constant Flyology_TUI.Surfaces.Surface :=
+      Content  : constant Flyology_TUI.Surfaces.Surface :=
         Stack
           (Heading,
-           Stack
-             (Trace_Surface,
-              Stack (Metrics, Stack (Evidence, Footer))));
-      Panel         : constant Flyology_TUI.Layouts.Block :=
+           Stack (Trace_Surface, Stack (Metrics, Stack (Evidence, Footer))));
+      Panel    : constant Flyology_TUI.Layouts.Block :=
         (Padding    => (Top => 1, Right => 2, Bottom => 1, Left => 2),
          Border     => Flyology_TUI.Layouts.Rounded,
          Appearance => Theme.Border,
          others     => <>);
-      Frame         : constant Flyology_TUI.Surfaces.Surface :=
+      Frame    : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Render (Panel, Content);
-      View          : Flyology_TUI.Views.View :=
+      View     : Flyology_TUI.Views.View :=
         Flyology_TUI.Views.From_Surface (Frame);
-      Renderer      : Flyology_TUI.Renderers.Renderer;
-      Output        : Unbounded_String;
+      Renderer : Flyology_TUI.Renderers.Renderer;
+      Output   : Unbounded_String;
    begin
       View.Bracketed_Paste := False;
       View.Window_Title :=
@@ -321,23 +325,29 @@ package body Counterweave.Terminal_Reports is
    is
       package Wide_Text renames Ada.Strings.Wide_Wide_Unbounded;
 
-      Source        : constant String :=
+      Source           : constant String :=
         Counterweave.Strings.Read_File (Report_Path);
-      Root          : constant Counterweave.JSON.Value :=
+      Root             : constant Counterweave.JSON.Value :=
         Counterweave.JSON.Parse (Source);
-      Stop_Reason   : constant Wide_Wide_String :=
+      Stop_Reason      : constant Wide_Wide_String :=
         Wide
           (To_String
              (Counterweave.JSON.As_String
                 (Source,
                  Counterweave.JSON.Member (Source, Root, "stop_reason"))));
-      Trace_JSON    : constant Unbounded_String :=
+      Run_Evidence     : constant Conformance_Evidence :=
+        Evidence_From_Run (Run_Path);
+      Trace_JSON       : constant Unbounded_String :=
         (if Length (Update.Current_Trace_JSON) > 0
          then Update.Current_Trace_JSON
-         else Trace_From_Run (Run_Path));
-      Theme         : constant Flyology_TUI.Themes.Theme :=
+         else Run_Evidence.Trace);
+      Conformance_JSON : constant Unbounded_String :=
+        (if Length (Update.Current_Conformance_JSON) > 0
+         then Update.Current_Conformance_JSON
+         else Run_Evidence.Result);
+      Theme            : constant Flyology_TUI.Themes.Theme :=
         Flyology_TUI.Themes.Charm;
-      Heading       : constant Flyology_TUI.Surfaces.Surface :=
+      Heading          : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Horizontally
           (Flyology_TUI.Surfaces.From_Text
              ("COUNTERWEAVE", Flyology_TUI.Themes.Charm_Palette.Title),
@@ -346,7 +356,7 @@ package body Counterweave.Terminal_Reports is
               Flyology_TUI.Components.Indicators.Success_Tone,
               Theme),
            Gap => 2);
-      Shrink_Row    : constant Flyology_TUI.Surfaces.Surface :=
+      Shrink_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("shrink",
            Wide
@@ -357,7 +367,7 @@ package body Counterweave.Terminal_Reports is
            & Stop_Reason,
            Content_Width,
            Theme);
-      Model_Row     : constant Flyology_TUI.Surfaces.Surface :=
+      Model_Row        : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("model pack",
            Wide
@@ -369,7 +379,7 @@ package body Counterweave.Terminal_Reports is
               else Case_Model_Label (Case_Path)),
            Content_Width,
            Theme);
-      Property_Row  : constant Flyology_TUI.Surfaces.Surface :=
+      Property_Row     : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("property",
            Wide
@@ -378,43 +388,44 @@ package body Counterweave.Terminal_Reports is
               & To_String (Update.Failure_Fingerprint)),
            Content_Width,
            Theme);
-      Original_Row  : constant Flyology_TUI.Surfaces.Surface :=
+      Original_Row     : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("original repro",
            Wide (To_String (Update.Original_Repro)),
            Content_Width,
            Theme);
-      Current_Row   : constant Flyology_TUI.Surfaces.Surface :=
+      Current_Row      : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("reduced repro",
            Wide (To_String (Update.Current_Repro)),
            Content_Width,
            Theme);
-      Trace_Surface : constant Flyology_TUI.Surfaces.Surface :=
+      Trace_Surface    : constant Flyology_TUI.Surfaces.Surface :=
         (if Length (Trace_JSON) = 0
          then Flyology_TUI.Surfaces.Create (Content_Width, 0)
          else
            Counterweave.Trace_Views.Render
-             (Source       => To_String (Trace_JSON),
-              Width        => Content_Width,
-              Theme        => Theme,
-              Maximum_Rows => 4,
-              Compact      => True));
-      Case_Row      : constant Flyology_TUI.Surfaces.Surface :=
+             (Source             => To_String (Trace_JSON),
+              Conformance_Source => To_String (Conformance_JSON),
+              Width              => Content_Width,
+              Theme              => Theme,
+              Maximum_Rows       => 4,
+              Compact            => True));
+      Case_Row         : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("reduced case", Wide (Case_Path), Content_Width, Theme);
-      Run_Row       : constant Flyology_TUI.Surfaces.Surface :=
+      Run_Row          : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("reduced run", Wide (Run_Path), Content_Width, Theme);
-      Report_Row    : constant Flyology_TUI.Surfaces.Surface :=
+      Report_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("reduction evidence", Wide (Report_Path), Content_Width, Theme);
-      Context       : constant Flyology_TUI.Surfaces.Surface :=
+      Context          : constant Flyology_TUI.Surfaces.Surface :=
         Stack
           (Model_Row, Stack (Property_Row, Stack (Original_Row, Current_Row)));
-      Evidence      : constant Flyology_TUI.Surfaces.Surface :=
+      Evidence         : constant Flyology_TUI.Surfaces.Surface :=
         Stack (Case_Row, Stack (Run_Row, Report_Row));
-      Footer        : constant Flyology_TUI.Surfaces.Surface :=
+      Footer           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Status_Line
           ([Flyology_TUI.Components.Indicators.Make_Segment
               ("FINGERPRINT PRESERVED",
@@ -424,25 +435,23 @@ package body Counterweave.Terminal_Reports is
             Flyology_TUI.Components.Indicators.Make_Segment ("REPLAYABLE")],
            Content_Width,
            Theme);
-      Content       : constant Flyology_TUI.Surfaces.Surface :=
+      Content          : constant Flyology_TUI.Surfaces.Surface :=
         Stack
           (Heading,
            Stack
              (Trace_Surface,
-              Stack
-                (Context,
-                 Stack (Shrink_Row, Stack (Evidence, Footer)))));
-      Panel         : constant Flyology_TUI.Layouts.Block :=
+              Stack (Context, Stack (Shrink_Row, Stack (Evidence, Footer)))));
+      Panel            : constant Flyology_TUI.Layouts.Block :=
         (Padding    => (Top => 1, Right => 2, Bottom => 1, Left => 2),
          Border     => Flyology_TUI.Layouts.Rounded,
          Appearance => Theme.Border,
          others     => <>);
-      Frame         : constant Flyology_TUI.Surfaces.Surface :=
+      Frame            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Render (Panel, Content);
-      View          : Flyology_TUI.Views.View :=
+      View             : Flyology_TUI.Views.View :=
         Flyology_TUI.Views.From_Surface (Frame);
-      Renderer      : Flyology_TUI.Renderers.Renderer;
-      Output        : Unbounded_String;
+      Renderer         : Flyology_TUI.Renderers.Renderer;
+      Output           : Unbounded_String;
    begin
       View.Bracketed_Paste := False;
       View.Window_Title :=
