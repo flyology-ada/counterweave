@@ -9,6 +9,10 @@ package body Counterweave.Artifacts is
    use type Counterweave.JSON.Value_Kind;
    use type GNAT.OS_Lib.String_Access;
 
+   function Is_Lower_Hex_SHA256 (Value : String) return Boolean
+   is (Value'Length = 64
+       and then (for all Item of Value => Item in '0' .. '9' | 'a' .. 'f'));
+
    function Outcome_Image
      (Outcome : Counterweave.Processes.Outcome_Kind) return String is
    begin
@@ -104,7 +108,7 @@ package body Counterweave.Artifacts is
       Content     : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.case/2"","
+        & "  ""format"": ""counterweave.case/3"","
         & ASCII.LF
         & "  ""pack"": {""name"": "
         & Counterweave.Strings.JSON_String (To_String (Data.Pack_Name))
@@ -156,6 +160,10 @@ package body Counterweave.Artifacts is
         & "}"
         & ASCII.LF;
    begin
+      if not Is_Lower_Hex_SHA256 (To_String (Data.Data_SHA256)) then
+         raise Counterweave.Strings.Format_Error
+           with "case/3 requires a canonical generated data hash";
+      end if;
       declare
          Parameters : constant Counterweave.JSON.Value :=
            Counterweave.JSON.Parse (To_String (Data.Parameters_JSON));
@@ -267,7 +275,7 @@ package body Counterweave.Artifacts is
              (Source, Counterweave.JSON.Member (Source, Root, "format")));
       Ignored    : Unbounded_String;
    begin
-      if Format /= "counterweave.case/2" then
+      if Format not in "counterweave.case/2" | "counterweave.case/3" then
          raise Counterweave.Strings.Format_Error
            with "unsupported case artifact format";
       elsif Counterweave.JSON.Kind (Pack) /= Counterweave.JSON.Object_Value
@@ -317,6 +325,24 @@ package body Counterweave.Artifacts is
         Counterweave.JSON.As_String
           (Source,
            Counterweave.JSON.Member (Source, Model, "compiled_sha256"));
+      if Format = "counterweave.case/3" then
+         declare
+            Data_Hash : constant Counterweave.JSON.Value :=
+              Counterweave.JSON.Member (Source, Model, "data_sha256");
+         begin
+            if Counterweave.JSON.Kind (Data_Hash)
+              /= Counterweave.JSON.String_Value
+            then
+               raise Counterweave.Strings.Format_Error
+                 with "case/3 generated data hash is missing";
+            end if;
+            Ignored := Counterweave.JSON.As_String (Source, Data_Hash);
+            if not Is_Lower_Hex_SHA256 (To_String (Ignored)) then
+               raise Counterweave.Strings.Format_Error
+                 with "case/3 generated data hash is not canonical";
+            end if;
+         end;
+      end if;
       Ignored :=
         Counterweave.JSON.As_String
           (Source, Counterweave.JSON.Member (Source, Model, "diversity_seed"));
@@ -356,7 +382,7 @@ package body Counterweave.Artifacts is
       Content         : constant String :=
         "{"
         & ASCII.LF
-        & "  ""format"": ""counterweave.run/2"","
+        & "  ""format"": ""counterweave.run/3"","
         & ASCII.LF
         & "  ""case_sha256"": "
         & Counterweave.Strings.JSON_String

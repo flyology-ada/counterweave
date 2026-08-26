@@ -1,4 +1,5 @@
 with "flyology_tui";
+with "flyology_tla";
 
 project Counterweave is
 

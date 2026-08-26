@@ -12,7 +12,7 @@ with Counterweave.Hashes;
 with Counterweave.JSON;
 with Counterweave.Processes;
 with Counterweave.Strings;
-with Counterweave.Traces;
+with Flyology_TLA.Traces;
 with GNAT.OS_Lib;
 
 procedure Counterweave_Tests is
@@ -22,7 +22,6 @@ procedure Counterweave_Tests is
    use type Counterweave.Choices.Shrink_Stop_Reason;
    use type Counterweave.Adapter_Results.Verdict_Kind;
    use type Counterweave.Processes.Outcome_Kind;
-   use type Counterweave.Traces.Step_Status;
 
    Failures : Natural := 0;
 
@@ -1048,23 +1047,56 @@ procedure Counterweave_Tests is
    end Test_CLI_Path_Safety;
 
    procedure Test_Adapter_Results is
-      Violation_JSON : constant String :=
-        "{""format"":""counterweave.adapter-result/1"","
+      --  Match the production adapter-result parser limits.
+      Limits           : constant Flyology_TLA.Traces.Load_Limits :=
+        (Maximum_File_Bytes   => 1_048_576,
+         Maximum_Steps        => 4_096,
+         Maximum_JSON_Depth   => 64,
+         Maximum_Object_Names => 10_000,
+         Maximum_Name_Bytes   => 4_096,
+         Maximum_String_Bytes => 100_000,
+         Maximum_Value_Bytes  => 1_048_576);
+      Trace_JSON       : constant String :=
+        "{""format"":""flyology.tla.trace/2"","
+        & """model"":{""module"":""Ledger"","
+        & """configuration"":""unit"","
+        & """source_sha256"":"""
+        & String'(1 .. 64 => 'a')
+        & """,""configuration_sha256"":"""
+        & String'(1 .. 64 => 'b')
+        & """,""toolchain"":""unit""},"
+        & """initial"":{""state"":{""balances"":[40,40]}},"
+        & """steps"":[{""index"":1,""action"":""Ledger!Transfer"","
+        & """role"":""duplicate-retry"","
+        & """input"":{""transaction"":1},"
+        & """expected"":{""outcome"":{""applied"":false},"
+        & """state"":{""balances"":[26,54]}},"
+        & """model_source"":""Ledger!Transfer""}]}";
+      Trace_SHA256     : constant String :=
+        Counterweave.Hashes.SHA256 (Trace_JSON);
+      Conformance_JSON : constant String :=
+        "{""format"":""flyology.tla.result/1"",""verdict"":""diverged"","
+        & """trace_sha256"":"""
+        & Trace_SHA256
+        & """,""compared_steps"":1,""failure"":{""step"":1,"
+        & """property"":""transfers-are-idempotent"","
+        & """fingerprint"":""duplicate-credit"","
+        & """detail"":""a repeated transaction changed state""}}";
+      Violation_JSON   : constant String :=
+        "{""format"":""counterweave.adapter-result/2"","
         & """pack"":{""name"":""ledger"",""version"":""1""},"
         & """verdict"":""property-violation"","
         & """property"":""transfers-are-idempotent"","
         & """fingerprint"":""duplicate-credit"","
         & """observations"":{""credited_twice"":true},"
-        & """trace"":{""format"":""counterweave.trace/1"","
-        & """summary"":""2 accounts | 3 steps"","
-        & """basis"":""duplicate transactions are ignored"","
-        & """steps"":[{""role"":""duplicate-retry"","
-        & """action"":""transfer tx 1"","
-        & """model"":""a1=26, a2=54"",""observed"":""a1=12, a2=68"","  --  State after transition.
-        & """status"":""violation"","
-        & """model_source"":""step_expectation[3]""}]}}";
-      Parsed         : constant Counterweave.Adapter_Results.Adapter_Result :=
-        Counterweave.Adapter_Results.Parse (Violation_JSON, "ledger", "1");
+        & """conformance"":"
+        & Conformance_JSON
+        & ",""trace"":"
+        & Trace_JSON
+        & "}";
+      Parsed           :
+        constant Counterweave.Adapter_Results.Adapter_Result :=
+          Counterweave.Adapter_Results.Parse (Violation_JSON, "ledger", "1");
    begin
       Check
         (Parsed.Verdict = Counterweave.Adapter_Results.Property_Violation,
@@ -1075,17 +1107,15 @@ procedure Counterweave_Tests is
          "preserve stable failure fingerprint");
       Check
         (Counterweave.Adapter_Results.Has_Trace (Parsed),
-         "parse optional generator-neutral counterexample trace");
+         "parse shared conformance evidence");
       declare
-         Trace : constant Counterweave.Traces.Counterexample_Trace :=
-           Counterweave.Traces.Parse
-             (Ada.Strings.Unbounded.To_String (Parsed.Trace_JSON));
+         Trace : constant Flyology_TLA.Traces.Trace :=
+           Flyology_TLA.Traces.Parse
+             (Ada.Strings.Unbounded.To_String (Parsed.Trace_JSON), Limits);
       begin
          Check
-           (Natural (Trace.Steps.Length) = 1
-            and then Trace.Steps.First_Element.Status
-                     = Counterweave.Traces.Violated,
-            "validate aligned model and observed trace steps");
+           (Natural (Trace.Steps.Length) = 1,
+            "validate canonical Flyology TLA+ trace");
       end;
       declare
          Round_Trip : constant Counterweave.Adapter_Results.Adapter_Result :=
@@ -1126,11 +1156,16 @@ procedure Counterweave_Tests is
                Ignored :
                  constant Counterweave.Adapter_Results.Adapter_Result :=
                    Counterweave.Adapter_Results.Parse
-                     ("{""format"":""counterweave.adapter-result/1"","
+                     ("{""format"":""counterweave.adapter-result/2"","
                       & """pack"":{""name"":""ledger"",""version"":""1""},"
                       & """verdict"":""property-violation"","
                       & """property"":""transfers-are-idempotent"","
-                      & """fingerprint"":null,""observations"":{}}",
+                      & """fingerprint"":null,""observations"":{},"
+                      & """conformance"":"
+                      & Conformance_JSON
+                      & ",""trace"":"
+                      & Trace_JSON
+                      & "}",
                       "ledger",
                       "1");
                pragma Unreferenced (Ignored);
@@ -1152,13 +1187,16 @@ procedure Counterweave_Tests is
                Ignored :
                  constant Counterweave.Adapter_Results.Adapter_Result :=
                    Counterweave.Adapter_Results.Parse
-                     ("{""format"":""counterweave.adapter-result/1"","
+                     ("{""format"":""counterweave.adapter-result/2"","
                       & """pack"":{""name"":""ledger"",""version"":""1""},"
-                      & """verdict"":""pass"",""property"":""ledger-valid"","
-                      & """fingerprint"":null,""observations"":{},"
-                      & """trace"":{""format"":""counterweave.trace/1"","
-                      & """summary"":""invalid"",""basis"":""model"","
-                      & """steps"":[]}}",
+                      & """verdict"":""property-violation"","
+                      & """property"":""transfers-are-idempotent"","
+                      & """fingerprint"":""duplicate-credit"","
+                      & """observations"":{},"
+                      & """conformance"":"
+                      & Conformance_JSON
+                      & ",""trace"":{""format"":""wrong"","
+                      & """model"":{},""initial"":{},""steps"":[]}}",
                       "ledger",
                       "1");
                pragma Unreferenced (Ignored);
@@ -1169,7 +1207,144 @@ procedure Counterweave_Tests is
             when Counterweave.Adapter_Results.Protocol_Error =>
                Raised := True;
          end;
-         Check (Raised, "reject a malformed optional counterexample trace");
+         Check (Raised, "reject a malformed shared trace");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Bad_Result : constant String :=
+                 "{""format"":""flyology.tla.result/1"","
+                 & """verdict"":""diverged"",""trace_sha256"":"""
+                 & String'(1 .. 64 => 'b')
+                 & """,""compared_steps"":1,""failure"":{""step"":1,"
+                 & """property"":""transfers-are-idempotent"","
+                 & """fingerprint"":""duplicate-credit"","
+                 & """detail"":""mismatch""}}";
+               Ignored    :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     ("{""format"":""counterweave.adapter-result/2"","
+                      & """pack"":{""name"":""ledger"",""version"":""1""},"
+                      & """verdict"":""property-violation"","
+                      & """property"":""transfers-are-idempotent"","
+                      & """fingerprint"":""duplicate-credit"","
+                      & """observations"":{},""conformance"":"
+                      & Bad_Result
+                      & ",""trace"":"
+                      & Trace_JSON
+                      & "}",
+                      "ledger",
+                      "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject conformance evidence bound to another trace");
+      end;
+
+      declare
+         Raised      : Boolean := False;
+         Legacy_JSON : String := Violation_JSON;
+         Position    : constant Natural :=
+           Ada.Strings.Fixed.Index (Legacy_JSON, "adapter-result/2");
+      begin
+         Legacy_JSON (Position + 15) := '1';
+         begin
+            declare
+               Ignored :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     (Legacy_JSON, "ledger", "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject the superseded adapter result format");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Infrastructure_Result : constant String :=
+                 "{""format"":""flyology.tla.result/1"","
+                 & """verdict"":""invalid-trace"",""trace_sha256"":"""
+                 & Trace_SHA256
+                 & """,""compared_steps"":0,""failure"":{""step"":0,"
+                 & """property"":""transfers-are-idempotent"","
+                 & """fingerprint"":""invalid-trace"","
+                 & """detail"":""trace rejected before replay""}}";
+               Ignored               :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     ("{""format"":""counterweave.adapter-result/2"","
+                      & """pack"":{""name"":""ledger"",""version"":""1""},"
+                      & """verdict"":""pass"",""property"":"""
+                      & "transfers-are-idempotent"",""fingerprint"":null,"
+                      & """observations"":{},""conformance"":"
+                      & Infrastructure_Result
+                      & ",""trace"":"
+                      & Trace_JSON
+                      & "}",
+                      "ledger",
+                      "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check
+           (Raised, "reject an infrastructure replay as a semantic result");
+      end;
+
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            declare
+               Incomplete_Result : constant String :=
+                 "{""format"":""flyology.tla.result/1"","
+                 & """verdict"":""conformant"",""trace_sha256"":"""
+                 & Trace_SHA256
+                 & """,""compared_steps"":0,""failure"":null}";
+               Ignored           :
+                 constant Counterweave.Adapter_Results.Adapter_Result :=
+                   Counterweave.Adapter_Results.Parse
+                     ("{""format"":""counterweave.adapter-result/2"","
+                      & """pack"":{""name"":""ledger"",""version"":""1""},"
+                      & """verdict"":""pass"",""property"":"""
+                      & "transfers-are-idempotent"",""fingerprint"":null,"
+                      & """observations"":{},""conformance"":"
+                      & Incomplete_Result
+                      & ",""trace"":"
+                      & Trace_JSON
+                      & "}",
+                      "ledger",
+                      "1");
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
+         exception
+            when Counterweave.Adapter_Results.Protocol_Error =>
+               Raised := True;
+         end;
+         Check (Raised, "reject conformance over only a trace prefix");
       end;
    end Test_Adapter_Results;
 

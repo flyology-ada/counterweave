@@ -24,6 +24,24 @@ jobs:
         run: >-
           alr index --add=git+https://github.com/flyology-ada/alire-index.git
           --name=flyology
+      - name: Reject bespoke verifier and dependency bypasses
+        run: |
+          test ! -e src/counterweave-traces.ads
+          ! git grep -E 'counterweave\.trace/1|Counterweave\.Traces' -- \
+            src tests examples README.md docs
+          awk '
+            /^\[\[pins\]\]$/ { in_pins = 1; next }
+            /^\[/ { in_pins = 0 }
+            in_pins && /flyology_tla/ { found = 1 }
+            END { exit found }
+          ' alire.toml
+      - name: Smoke test the indexed Flyology TLA+ release
+        run: |
+          mkdir /tmp/flyology-tla-indexed
+          cd /tmp/flyology-tla-indexed
+          alr -n get flyology_tla=0.1.0-dev -b
+          alr -n install flyology_tla=0.1.0-dev --prefix /tmp/flyology-tla-prefix
+          /tmp/flyology-tla-prefix/bin/flyology-tla --help
       - name: Build Ada executables
         run: alr -n build
       - name: Run Ada tests

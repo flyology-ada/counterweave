@@ -12,10 +12,12 @@ package Counterweave.Trace_Views is
    function Step_Count (Source : String) return Natural;
 
    function Render
-     (Source       : String;
-      Width        : Positive;
-      Theme        : Flyology_TUI.Themes.Theme;
-      Maximum_Rows : Positive := 8;
-      Compact      : Boolean := False) return Flyology_TUI.Surfaces.Surface;
+     (Source             : String;
+      Conformance_Source : String;
+      Width              : Positive;
+      Theme              : Flyology_TUI.Themes.Theme;
+      Maximum_Rows       : Positive := 8;
+      Compact            : Boolean := False)
+      return Flyology_TUI.Surfaces.Surface;
 
 end Counterweave.Trace_Views;

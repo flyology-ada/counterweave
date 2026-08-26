@@ -42,9 +42,13 @@ else
 fi
 
 grep -q '"outcome": "property-violation"' "$run_file"
+grep -q '"format": "counterweave.case/3"' "$case_file"
 grep -q '"fingerprint":"duplicate-transfer-not-ignored"' "$run_file"
-grep -q 'counterweave.trace/1' "$run_file"
-grep -q '"status":"violation"' "$run_file"
+grep -q 'counterweave.adapter-result/2' "$run_file"
+grep -q 'flyology.tla.result/1' "$run_file"
+grep -q 'flyology.tla.trace/2' "$run_file"
+grep -q '"verdict":"diverged"' "$run_file"
+grep -q '"failure":{"step":' "$run_file"
 grep -q '"status": "property-violation"' "$campaign_file"
 grep -q '"failure_fingerprint":"duplicate-transfer-not-ignored"' "$campaign_file"
 bin/counterweave reduce \
@@ -53,7 +57,7 @@ bin/counterweave reduce \
   --run-output "$reduced_run_file" \
   --report-output "$reduction_file"
 grep -q '"step_count":5' "$reduction_file"
-grep -q '"format": "counterweave.reduction/3"' "$reduction_file"
+grep -q '"format": "counterweave.reduction/4"' "$reduction_file"
 grep -q '"maximum_attempts": 1000' "$reduction_file"
 grep -q '"stop_reason": "fixed-point"' "$reduction_file"
 grep -q '"strategy":"small-value"' "$reduction_file"
@@ -63,6 +67,8 @@ grep -q '"property": "transfers-are-idempotent"' "$reduction_file"
 grep -q '"failure_fingerprint": "duplicate-transfer-not-ignored"' "$reduction_file"
 grep -q '"original_trace": {' "$reduction_file"
 grep -q '"final_trace": {' "$reduction_file"
+grep -q '"original_conformance": {' "$reduction_file"
+grep -q '"final_conformance": {' "$reduction_file"
 for diversity_seed in 1 2; do
   bin/counterweave generate \
     --model examples/ada_idempotent_transfer/model.mzn \

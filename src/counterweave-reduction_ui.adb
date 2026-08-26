@@ -122,16 +122,16 @@ package body Counterweave.Reduction_UI is
    end Progress_State;
 
    function Present
-     (Item     : Counterweave.Reducers.Reduction_Update;
-      Title    : String;
-      Case_Path : String;
-      Run_Path : String;
+     (Item        : Counterweave.Reducers.Reduction_Update;
+      Title       : String;
+      Case_Path   : String;
+      Run_Path    : String;
       Report_Path : String;
-      Width    : Natural;
-      Height   : Natural;
-      Stopping : Boolean;
-      Completed : Boolean;
-      Succeeded : Boolean) return Flyology_TUI.Views.View
+      Width       : Natural;
+      Height      : Natural;
+      Stopping    : Boolean;
+      Completed   : Boolean;
+      Succeeded   : Boolean) return Flyology_TUI.Views.View
    is
       Theme           : constant Flyology_TUI.Themes.Theme :=
         Flyology_TUI.Themes.Charm;
@@ -177,9 +177,8 @@ package body Counterweave.Reduction_UI is
       is (if Length (Value) = 0 then Current_Size else To_String (Value));
 
       function Path_Image return Wide_Wide_String is
-         Arrow : constant Wide_Wide_String :=
-           Wide_Wide_String'
-             (1 => Wide_Wide_Character'Val (16#2192#));
+         Arrow          : constant Wide_Wide_String :=
+           Wide_Wide_String'(1 => Wide_Wide_Character'Val (16#2192#));
          Original_Steps : constant Natural :=
            (if Length (Item.Original_Trace_JSON) = 0
             then 0
@@ -225,14 +224,16 @@ package body Counterweave.Reduction_UI is
 
       function Trace_Surface return Flyology_TUI.Surfaces.Surface
       is (if Length (Item.Current_Trace_JSON) = 0
+            or else Length (Item.Current_Conformance_JSON) = 0
           then Flyology_TUI.Surfaces.Create (Content_Width, 0)
           else
             Counterweave.Trace_Views.Render
-              (Source       => To_String (Item.Current_Trace_JSON),
-               Width        => Content_Width,
-               Theme        => Theme,
-               Maximum_Rows => (if Compact_Height then 4 else 6),
-               Compact      => Compact_Height));
+              (Source             => To_String (Item.Current_Trace_JSON),
+               Conformance_Source => To_String (Item.Current_Conformance_JSON),
+               Width              => Content_Width,
+               Theme              => Theme,
+               Maximum_Rows       => (if Compact_Height then 4 else 6),
+               Compact            => Compact_Height));
 
       function Last_Result return String is
       begin
@@ -240,21 +241,24 @@ package body Counterweave.Reduction_UI is
             return "waiting for the first candidate";
          end if;
          case Item.Outcome is
-            when Counterweave.Reducers.Preserved =>
+            when Counterweave.Reducers.Preserved            =>
                return
                  (if Item.Retained
                   then "same bug reproduced; smaller case kept"
                   else "same bug reproduced");
-            when Counterweave.Reducers.Different_Result =>
+
+            when Counterweave.Reducers.Different_Result     =>
                return "bug changed or disappeared; not kept";
-            when Counterweave.Reducers.Invalid_Candidate =>
+
+            when Counterweave.Reducers.Invalid_Candidate    =>
                return "generated case was invalid; not kept";
+
             when Counterweave.Reducers.Infrastructure_Error =>
                return "infrastructure error; candidate not kept";
          end case;
       end Last_Result;
 
-      Heading               : constant Flyology_TUI.Surfaces.Surface :=
+      Heading            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Horizontally
           (Flyology_TUI.Surfaces.From_Text
              ("COUNTERWEAVE", Flyology_TUI.Themes.Charm_Palette.Title),
@@ -272,9 +276,9 @@ package body Counterweave.Reduction_UI is
                else Flyology_TUI.Components.Indicators.Success_Tone),
               Theme),
            Gap => 2);
-      Purpose               : constant Flyology_TUI.Surfaces.Surface :=
+      Purpose            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Surfaces.From_Text (Wide (Title), Theme.Muted);
-      Identity_Row          : constant Flyology_TUI.Surfaces.Surface :=
+      Identity_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("MODEL",
            Wide
@@ -287,7 +291,7 @@ package body Counterweave.Reduction_UI is
                  else To_String (Item.Model_Label))),
            Content_Width,
            Theme);
-      Property_Row          : constant Flyology_TUI.Surfaces.Surface :=
+      Property_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("CHECK",
            Wide
@@ -300,7 +304,7 @@ package body Counterweave.Reduction_UI is
                  else Humanize (To_String (Item.Failure_Fingerprint)))),
            Content_Width,
            Theme);
-      Original_Row          : constant Flyology_TUI.Surfaces.Surface :=
+      Original_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("ORIGINAL",
            Wide
@@ -309,33 +313,33 @@ package body Counterweave.Reduction_UI is
               else To_String (Item.Original_Repro)),
            Content_Width,
            Theme);
-      Current_Row           : constant Flyology_TUI.Surfaces.Surface :=
+      Current_Row        : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ((if Completed then "REDUCED" else "NOW"),
            Wide (Repro_Image (Item.Current_Repro)),
            Content_Width,
            Theme);
-      Path_Row              : constant Flyology_TUI.Surfaces.Surface :=
+      Path_Row           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("PATH SIZE", Path_Image, Content_Width, Theme);
-      Context               : constant Flyology_TUI.Surfaces.Surface :=
+      Context            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Vertically
           (Identity_Row,
            Flyology_TUI.Layouts.Join_Vertically
              (Property_Row,
               Flyology_TUI.Layouts.Join_Vertically
                 (Original_Row, Current_Row)));
-      Compact_Context       : constant Flyology_TUI.Surfaces.Surface :=
+      Compact_Context    : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Vertically
           (Identity_Row,
            Flyology_TUI.Layouts.Join_Vertically
              (Property_Row,
               Flyology_TUI.Layouts.Join_Vertically
                 (Original_Row, Current_Row)));
-      Divider               : constant Flyology_TUI.Surfaces.Surface :=
+      Divider            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Divider
           (Content_Width, "SHRINK ACTIVITY", Theme);
-      Attempt_Row           : constant Flyology_TUI.Surfaces.Surface :=
+      Attempt_Row        : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("TRYING",
            Wide
@@ -347,41 +351,34 @@ package body Counterweave.Reduction_UI is
                  else " | " & Humanize (To_String (Item.Strategy)))),
            Content_Width,
            Theme);
-      Accepted_Row          : constant Flyology_TUI.Surfaces.Surface :=
+      Accepted_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("SMALLER CASES KEPT",
            Wide (Image (Item.Accepted)),
            Content_Width,
            Theme);
-      Tape_Row              : constant Flyology_TUI.Surfaces.Surface :=
+      Tape_Row           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("REPLAY CHOICES", Wide (Current_Size), Content_Width, Theme);
-      Strategy_Row          : constant Flyology_TUI.Surfaces.Surface :=
+      Strategy_Row       : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
-          ("LAST RESULT",
-           Wide (Last_Result),
-           Content_Width,
-           Theme);
-      Metrics               : constant Flyology_TUI.Surfaces.Surface :=
+          ("LAST RESULT", Wide (Last_Result), Content_Width, Theme);
+      Metrics            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Vertically
           (Attempt_Row,
            Flyology_TUI.Layouts.Join_Vertically
              (Accepted_Row,
               Flyology_TUI.Layouts.Join_Vertically (Tape_Row, Strategy_Row)));
-      Compact_Result_Row    : constant Flyology_TUI.Surfaces.Surface :=
+      Compact_Result_Row : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("RESULT",
            Wide
-             (Last_Result
-              & " | "
-              & Image (Item.Accepted)
-              & " smaller kept"),
+             (Last_Result & " | " & Image (Item.Accepted) & " smaller kept"),
            Content_Width,
            Theme);
-      Compact_Metrics       : constant Flyology_TUI.Surfaces.Surface :=
-        Flyology_TUI.Layouts.Join_Vertically
-          (Attempt_Row, Compact_Result_Row);
-      Completion_Row        : constant Flyology_TUI.Surfaces.Surface :=
+      Compact_Metrics    : constant Flyology_TUI.Surfaces.Surface :=
+        Flyology_TUI.Layouts.Join_Vertically (Attempt_Row, Compact_Result_Row);
+      Completion_Row     : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("SHRINK",
            Wide
@@ -392,30 +389,29 @@ package body Counterweave.Reduction_UI is
               & Current_Size),
            Content_Width,
            Theme);
-      Case_Row              : constant Flyology_TUI.Surfaces.Surface :=
+      Case_Row           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("CASE", Wide (Case_Path), Content_Width, Theme);
-      Run_Row               : constant Flyology_TUI.Surfaces.Surface :=
+      Run_Row            : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("RUN", Wide (Run_Path), Content_Width, Theme);
-      Report_Row            : constant Flyology_TUI.Surfaces.Surface :=
+      Report_Row         : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Components.Indicators.Key_Value
           ("REDUCTION", Wide (Report_Path), Content_Width, Theme);
-      Evidence              : constant Flyology_TUI.Surfaces.Surface :=
+      Evidence           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Vertically
           (Case_Row,
            Flyology_TUI.Layouts.Join_Vertically (Run_Row, Report_Row));
-      Footer                : constant Flyology_TUI.Surfaces.Surface :=
+      Footer             : constant Flyology_TUI.Surfaces.Surface :=
         (if Completed
          then
            Flyology_TUI.Components.Indicators.Status_Line
-               ([Flyology_TUI.Components.Indicators.Make_Segment
+             ([Flyology_TUI.Components.Indicators.Make_Segment
                  (Counterweave.Trace_Views.Matched_Mark & " MODEL = ADA",
                   Flyology_TUI.Components.Indicators.High,
                   Flyology_TUI.Components.Indicators.Success_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
-                 (Counterweave.Trace_Views.Diverged_Mark
-                  & " FIRST DIFFERENCE",
+                 (Counterweave.Trace_Views.Diverged_Mark & " FIRST DIFFERENCE",
                   Flyology_TUI.Components.Indicators.Normal,
                   Flyology_TUI.Components.Indicators.Warning_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
@@ -434,8 +430,7 @@ package body Counterweave.Reduction_UI is
                   Flyology_TUI.Components.Indicators.High,
                   Flyology_TUI.Components.Indicators.Success_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
-                 (Counterweave.Trace_Views.Diverged_Mark
-                  & " FIRST DIFFERENCE",
+                 (Counterweave.Trace_Views.Diverged_Mark & " FIRST DIFFERENCE",
                   Flyology_TUI.Components.Indicators.Normal,
                   Flyology_TUI.Components.Indicators.Warning_Tone),
                Flyology_TUI.Components.Indicators.Make_Segment
@@ -443,18 +438,17 @@ package body Counterweave.Reduction_UI is
                   & " PROPERTY VIOLATION",
                   Flyology_TUI.Components.Indicators.Normal,
                   Flyology_TUI.Components.Indicators.Error_Tone),
-               Flyology_TUI.Components.Indicators.Make_Segment
-                 ("q CANCEL")],
+               Flyology_TUI.Components.Indicators.Make_Segment ("q CANCEL")],
               Content_Width,
               Theme));
-      Activity              : constant Flyology_TUI.Surfaces.Surface :=
+      Activity           : constant Flyology_TUI.Surfaces.Surface :=
         Flyology_TUI.Layouts.Join_Vertically
           (Divider,
            Flyology_TUI.Layouts.Join_Vertically
              (Render_Progress,
               (if Compact_Height then Compact_Metrics else Metrics)),
            Gap => (if Compact_Height then 0 else 1));
-      Content               : constant Flyology_TUI.Surfaces.Surface :=
+      Content            : constant Flyology_TUI.Surfaces.Surface :=
         (if Completed
          then
            Flyology_TUI.Layouts.Join_Vertically
@@ -494,12 +488,12 @@ package body Counterweave.Reduction_UI is
                     Gap => 1),
                  Gap => 1),
               Gap => 1));
-      Panel                 : constant Flyology_TUI.Layouts.Block :=
+      Panel              : constant Flyology_TUI.Layouts.Block :=
         (Padding    => (Top => 1, Right => 2, Bottom => 1, Left => 2),
          Border     => Flyology_TUI.Layouts.Rounded,
          Appearance => Theme.Border,
          others     => <>);
-      Result                : Flyology_TUI.Views.View :=
+      Result             : Flyology_TUI.Views.View :=
         Flyology_TUI.Views.From_Surface
           (Flyology_TUI.Layouts.Render (Panel, Content));
    begin
@@ -600,7 +594,9 @@ package body Counterweave.Reduction_UI is
          begin
             Flyology_TUI.Backends.POSIX.Current_Size
               (Terminal, Detected_Width, Detected_Height, Available);
-            if Available and then Detected_Width > 0 and then Detected_Height > 0
+            if Available
+              and then Detected_Width > 0
+              and then Detected_Height > 0
             then
                Width := Detected_Width;
                Height := Detected_Height;
@@ -628,13 +624,13 @@ package body Counterweave.Reduction_UI is
                   Width := Event.Width;
                   Height := Event.Height;
                elsif Completed
-                 and then
-                   (Event.Kind = Flyology_TUI.Events.Interrupt
-                    or else
-                      (Event.Kind = Flyology_TUI.Events.Key_Press
-                       and then Event.Key.Kind
-                                  in Flyology_TUI.Events.Enter_Key
-                                   | Flyology_TUI.Events.Escape_Key))
+                 and then (Event.Kind = Flyology_TUI.Events.Interrupt
+                           or else (Event.Kind = Flyology_TUI.Events.Key_Press
+                                    and then Event.Key.Kind
+                                             in Flyology_TUI.Events.Enter_Key
+                                              | Flyology_TUI
+                                                  .Events
+                                                  .Escape_Key))
                then
                   Dismissed := True;
                elsif Completed

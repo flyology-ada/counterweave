@@ -29,3 +29,6 @@ command = ["./bin/counterweave_tests"]
 
 [[depends-on]]
 flyology_tui = "~0.1.1-dev"
+
+[[depends-on]]
+flyology_tla = "=0.1.0-dev"
